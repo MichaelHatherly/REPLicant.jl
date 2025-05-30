@@ -1,0 +1,5 @@
+REPLICANT_PORT
+Manifest.toml
+
+# Override global gitignore for CLAUDE.md
+!CLAUDE.md
