@@ -1,0 +1,23 @@
+name = "REPLicant"
+uuid = "8acbef56-6722-412a-9f59-5674813d37bb"
+authors = ["MichaelHatherly <michaelhatherly@gmail.com>"]
+version = "0.1.0"
+
+[deps]
+IOCapture = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
+Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
+
+[weakdeps]
+Revise = "295af30f-e4ad-537b-8983-00126c2a3abe"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
+
+[extensions]
+REPLicantReviseExt = "Revise"
+REPLicantTestExt = "Test"
+
+[compat]
+IOCapture = "0.2"
+Revise = "3"
+Sockets = "1"
+Test = "1"
+julia = "1.10"
