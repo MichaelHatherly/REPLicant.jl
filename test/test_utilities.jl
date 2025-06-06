@@ -9,6 +9,7 @@
         func;
         max_connections::Int = 100,
         read_timeout_seconds::Float64 = 30.0,
+        commands::Dict = Dict{String,Function}(),
     )
         mod = Module()
         mktempdir() do tmp
@@ -20,7 +21,12 @@
             cd(tmp) do
                 logger = Test.TestLogger()
                 Logging.with_logger(logger) do
-                    server = REPLicant.Server(mod; max_connections, read_timeout_seconds)
+                    server = REPLicant.Server(
+                        mod;
+                        max_connections,
+                        read_timeout_seconds,
+                        commands,
+                    )
                     port = take!(server.channel)
                     @info "REPLicant server started" port max_connections
                     port_file = joinpath(tmp, "REPLICANT_PORT")

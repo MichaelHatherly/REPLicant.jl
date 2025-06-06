@@ -65,7 +65,9 @@ This will:
   - `julia code`: Execute Julia code through REPLicant
   - `docs binding`: Look up documentation
   - `test-all`: Run all tests
-  - `test-item item`: Run a specific test item
+  - `test-item item`: Run a specific test item (uses `#test-item` command)
+  - `test-tag tags...`: Run tests with specific tags (uses `#test-tags` command)
+  - `include-file file`: Include a Julia file (uses `#include-file` command)
 
 The function supports all standard justfile naming conventions (`justfile`, `Justfile`, `.justfile`, etc.).
 
@@ -125,6 +127,74 @@ REPL and the server will shut down gracefully.
    REPL
 5. **State Persistence**: The Julia session remains active between connections,
    preserving variables and loaded packages since it is a live REPL
+
+## Custom Commands
+
+REPLicant supports special command syntax that begins with `#`. These commands
+provide additional functionality beyond simple code evaluation.
+
+### Built-in Commands
+
+REPLicant includes several built-in commands:
+
+- `#include-file <path>` - Include a Julia file relative to the project root
+  ```bash
+  just julia "#include-file src/utilities.jl"
+  ```
+
+- `#test-item <name>` - Run a specific test item by name (requires TestItemRunner)
+  ```bash
+  just julia "#test-item my_test_case"
+  ```
+
+- `#test-tags <tag1> <tag2>...` - Run tests matching all specified tags
+  ```bash
+  just julia "#test-tags unit integration"
+  ```
+
+### Creating Custom Commands
+
+You can register custom commands when starting the server:
+
+```julia
+using REPLicant
+
+# Define custom commands
+commands = Dict{String,Function}(
+    # Simple command that echoes back the input
+    "echo" => (code, id, mod) -> () -> "Echo: $code",
+    
+    # Command that evaluates code multiple times
+    "repeat" => (code, id, mod) -> begin
+        n, expr = split(code, ' ', limit=2)
+        () -> [include_string(mod, expr, "REPL[$id]") for _ in 1:parse(Int, n)]
+    end,
+    
+    # Command that modifies server state
+    "load-pkg" => (code, id, mod) -> begin
+        pkg = strip(code)
+        () -> Core.eval(mod, Meta.parse("using $pkg"))
+    end
+)
+
+# Start server with custom commands
+server = REPLicant.Server(; commands)
+```
+
+Command functions receive three arguments:
+- `code`: The command arguments as a string (everything after the command name)
+- `id`: The request ID for logging
+- `mod`: The active module context
+
+The function must return a thunk (zero-argument function) that performs the
+actual command action. The thunk's return value and any stdout output will be
+captured and sent back to the client.
+
+### Command Naming
+
+- Command names must start with a lowercase letter and can contain lowercase letters and hyphens
+- The regex pattern for valid commands is: `^#([a-z][a-z\-]+)\s+`
+- Invalid command names will cause the line to be evaluated as regular Julia code
 
 ## Risks and Considerations
 

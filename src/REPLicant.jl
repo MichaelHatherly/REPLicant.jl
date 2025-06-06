@@ -43,6 +43,27 @@ The server automatically:
 # Arguments
 - `max_connections::Int = 100`: Maximum number of concurrent connections allowed
 - `read_timeout_seconds::Float64 = 30.0`: Timeout for reading client requests (in seconds)
+- `commands::Dict`: provides a way to register custom commands.
+
+# Commands
+Commands are special directives that can be sent by clients to perform specific actions
+on the server. Use the syntax `#command-name arguments...` to invoke a command named
+`command-name` with the provided `arguments`. The server supports a set of built-in commands:
+
+- `#include-file <path>`: Includes a Julia file in the active module context
+- `#test-item <item>`: Runs a specific test item by name
+- `#test-tags <tags>...`: Runs tests filtered by tags
+
+The custom commands can be registered in the `commands` dictionary when creating the server. The registered functions take three arguments:
+
+- `code::AbstractString`: The command arguments as a string
+- `id::Integer`: The request ID for logging
+- `mod::Module`: The active module context where the command is executed
+
+The function must return a thunk (a zero-argument function) that performs the
+command action when called. Any values returned from the invoked thunk are
+captured and returned to the client. Any printing to stdout will be captured
+and sent back as part of the response.
 
 # Protocol
 - Each request must be a single line of Julia code terminated by a newline (`\\n`)
@@ -78,15 +99,17 @@ struct Server
         mod = nothing;
         max_connections::Int = 100,
         read_timeout_seconds::Float64 = READ_TIMEOUT_SECONDS,
+        commands::Dict = Dict{String,Function}(),
     )
         channel = Channel{Int}(1)
-        return new(
-            @async(_server($channel, $mod, $max_connections, $read_timeout_seconds)),
-            channel,
-            nothing,
-            max_connections,
-            read_timeout_seconds,
+        task = @async _server(
+            $channel,
+            $mod,
+            $max_connections,
+            $read_timeout_seconds,
+            $commands,
         )
+        return new(task, channel, nothing, max_connections, read_timeout_seconds)
     end
 end
 
@@ -113,6 +136,7 @@ function _server(
     mod::Union{Module,Nothing},
     max_connections::Int,
     read_timeout_seconds::Float64,
+    commands::Dict,
 )
     # We require a justfile to determine the project root directory. This ensures
     # the server runs in the context of a specific project and provides a clear
@@ -194,6 +218,7 @@ function _server(
                         request.id,
                         mod,
                         read_timeout_seconds,
+                        commands,
                     )
                 finally
                     # Always decrement counter when done with a connection
@@ -305,7 +330,7 @@ function _readline_with_timeout(
     end
 end
 
-function _handle_client(sock, id, mod, read_timeout_seconds)
+function _handle_client(sock, id, mod, read_timeout_seconds, commands)
     try
         # Protocol: single line of Julia code terminated by newline.
         # We strip whitespace to handle various client implementations.
@@ -314,7 +339,7 @@ function _handle_client(sock, id, mod, read_timeout_seconds)
         @info "Received code" id code = Text(code)
 
         # Execute the code and capture all outputs
-        result = _eval_code(code, id, mod)
+        result = _eval_code(code, id, mod, commands)
 
         # Protocol: send result followed by newline for easy parsing
         write(sock, result * "\n")
@@ -344,17 +369,79 @@ end
 # Code evaluation.
 #
 
-function _eval_code(code::AbstractString, id::Integer, mod::Union{Module,Nothing})
+function _include_file_command(code::AbstractString, id::Integer, mod::Module)
+    root = dirname(_find_just_file())
+    path = joinpath(root, code)
+    if isfile(path)
+        # Include the file in the active module context
+        @info "Including file" id path = Text(path)
+        return () -> Base.include(mod, path)
+    else
+        error("File not found: $path")
+    end
+end
+
+function _test_item_command(item::AbstractString, id::Integer, mod::Module)
+    _try_load_test_item_runner(mod)
+    code = "@run_package_tests filter=ti->ti.name == $(repr(item))"
+    @info "Running test item" id code
+    return () -> include_string(mod, code, "REPL[$id]")
+end
+
+function _test_tags_command(tags::AbstractString, id::Integer, mod::Module)
+    _try_load_test_item_runner(mod)
+    tags = Symbol.(split(strip(tags), ' '))
+    code = "@run_package_tests filter=ti->issubset($(repr(tags)), ti.tags)"
+    @info "Running tests with tags filter" id code
+    return () -> include_string(mod, code, "REPL[$id]")
+end
+
+function _try_load_test_item_runner(mod::Module)
+    # This command is used to run specific test items.
+    # It expects a TestItemRunner to be available in the module context.
+    if !isdefined(mod, :TestItemRunner)
+        try
+            Core.eval(mod, :(using TestItemRunner))
+        catch error
+            error("TestItemRunner not found in module context: $error")
+        end
+    end
+end
+
+function _eval_code(
+    code::AbstractString,
+    id::Integer,
+    mod::Union{Module,Nothing},
+    commands::Dict = Dict{String,Function}(),
+)
     # Use the active module to maintain state between evaluations.
     # This allows users to define variables and use them in subsequent calls.
     mod = @something(mod, Base.active_module())
     try
+        m = match(r"^#([a-z][a-z\-]+)\s+", code)
+        thunk = if isnothing(m)
+            () -> include_string(mod, code, "REPL[$id]")
+        else
+            command_string = m[1]
+            default_commands = Dict(
+                # Commands:
+                "include-file" => _include_file_command,
+                "test-item" => _test_item_command,
+                "test-tags" => _test_tags_command,
+            )
+            available_commands = merge(default_commands, commands)
+            command = get(available_commands, command_string, nothing)
+            if isnothing(command)
+                error("Unknown command: $command_string")
+            else
+                # Call the command with the rest of the code
+                command(lstrip(code[(length(m.match)+1):end]), id, mod)
+            end
+        end
         # IOCapture handles both stdout and the return value, giving us
         # REPL-like behavior. We rethrow InterruptException to allow
         # graceful interruption of long-running code.
-        result = IOCapture.capture(; rethrow = InterruptException) do
-            include_string(mod, code, "REPL[$id]")
-        end
+        result = IOCapture.capture(thunk; rethrow = InterruptException)
 
         buffer = IOBuffer()
         # Stdout output comes first, just like in the REPL
