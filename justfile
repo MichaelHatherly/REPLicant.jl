@@ -13,11 +13,14 @@ docs binding:
 test-all:
     just julia "@run_package_tests"
 
-test-tag tag:
-    just julia "@run_package_tests filter=ti-> :{{tag}} in ti.tags"
+test-tag *tags:
+    just julia "#test-tags {{tags}}"
 
 test-item item:
-    just julia "@run_package_tests filter=ti->ti.name == String(:{{item}})"
+    just julia "#test-item {{item}}"
+
+include-file file:
+    just julia "#include-file {{file}}"
 
 changelog:
     julia --project=.ci .ci/changelog.jl
