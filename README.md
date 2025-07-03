@@ -152,6 +152,31 @@ REPLicant includes several built-in commands:
   just julia "#test-tags unit integration"
   ```
 
+- `#meta <subcommand>` - Metadata inspection commands (see below for details)
+
+### Metadata Inspection
+
+REPLicant includes powerful metadata inspection commands for code analysis:
+
+```bash
+# List all objects in current module
+just julia "#meta list"
+
+# Get detailed info about a function
+just julia "#meta info process_data"
+
+# Analyze type stability
+just julia "#meta warntype compute (Int, Float64)"
+
+# Show function dependencies
+just julia "#meta deps main_function"
+
+# Display call graph
+just julia "#meta graph entry_point"
+```
+
+See the [metadata inspection documentation](docs/metadata-inspection-commands.md) for the full list of available commands and their usage.
+
 ### Creating Custom Commands
 
 You can register custom commands when starting the server:

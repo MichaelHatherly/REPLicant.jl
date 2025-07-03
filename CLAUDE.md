@@ -38,3 +38,26 @@ REPLicant is a socket-based Julia code evaluation server that allows remote exec
    - Reads port from `REPLICANT_PORT` file to connect to the correct server instance
 
 The server captures both stdout and return values using IOCapture, handles errors gracefully, and formats output similar to the Julia REPL.
+
+## Metadata Inspection Commands
+
+REPLicant includes powerful metadata inspection commands that help analyze Julia code:
+
+### Basic Commands
+- `#meta list [filter]` - List objects in current module (functions/types/variables/modules)
+- `#meta info <name>` - Show detailed information about an object
+
+### Performance Analysis
+- `#meta typed <func> (<types>)` - Show type-inferred code
+- `#meta warntype <func> (<types>)` - Analyze type stability
+- `#meta optimize <func> (<types>)` - Comprehensive performance analysis
+- `#meta llvm <func> (<types>)` - Show LLVM IR
+- `#meta native <func> (<types>)` - Show native assembly
+
+### Dependency Analysis
+- `#meta deps <function>` - Show what a function calls
+- `#meta callers <function>` - Show what calls a function
+- `#meta graph <function>` - Display call graph
+- `#meta uses <type>` - Show where a type is used
+
+See `docs/metadata-inspection-commands.md` for detailed documentation.
