@@ -75,7 +75,11 @@ function _eval_code(
         # IOCapture handles both stdout and the return value, giving us
         # REPL-like behavior. We rethrow InterruptException to allow
         # graceful interruption of long-running code.
-        result = IOCapture.capture(thunk; rethrow = InterruptException)
+        #
+        # We use `@invokelatest` to ensure that the thunk is executed in the
+        # latest world at all times so that it better reflects behaviour you're
+        # expect in the REPL itself.
+        result = @invokelatest IOCapture.capture(thunk; rethrow = InterruptException)
 
         buffer = IOBuffer()
         # Stdout output comes first, just like in the REPL
