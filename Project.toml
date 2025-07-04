@@ -1,10 +1,12 @@
 name = "REPLicant"
 uuid = "8acbef56-6722-412a-9f59-5674813d37bb"
-authors = ["MichaelHatherly <michaelhatherly@gmail.com>"]
 version = "1.1.0"
+authors = ["MichaelHatherly <michaelhatherly@gmail.com>"]
 
 [deps]
 IOCapture = "b5f81e59-6552-4d32-b1f0-c071b021bf89"
+InteractiveUtils = "b77e0a4c-d291-57a0-90e8-8db25a27a240"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Sockets = "6462fe0b-24de-5631-8697-dd941f90decc"
 
 [weakdeps]
@@ -17,6 +19,8 @@ REPLicantTestExt = "Test"
 
 [compat]
 IOCapture = "0.2"
+InteractiveUtils = "1"
+Printf = "1"
 Revise = "3"
 Sockets = "1"
 Test = "1"
