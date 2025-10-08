@@ -53,6 +53,7 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
+    continue-on-error: ${{ matrix.version == 'nightly' }}
     strategy:
       fail-fast: false
       matrix:
