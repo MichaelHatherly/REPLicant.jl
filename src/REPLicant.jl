@@ -102,12 +102,14 @@ struct Server
         commands::Dict = Dict{String,Function}(),
     )
         channel = Channel{Int}(1)
-        task = @async _server(
-            $channel,
-            $mod,
-            $max_connections,
-            $read_timeout_seconds,
-            $commands,
+        task = errormonitor(
+            @async _server(
+                $channel,
+                $mod,
+                $max_connections,
+                $read_timeout_seconds,
+                $commands,
+            )
         )
         return new(task, channel, nothing, max_connections, read_timeout_seconds)
     end
@@ -208,27 +210,29 @@ function _server(
     active_connections = Threads.Atomic{Int}(0)
 
     # Start the worker task that processes requests sequentially
-    worker = Threads.@spawn begin
-        try
-            for request in request_queue
-                try
-                    _revise(
-                        _handle_client,
-                        request.socket,
-                        request.id,
-                        mod,
-                        read_timeout_seconds,
-                        commands,
-                    )
-                finally
-                    # Always decrement counter when done with a connection
-                    Threads.atomic_sub!(active_connections, 1)
+    worker = errormonitor(
+        Threads.@spawn begin
+            try
+                for request in request_queue
+                    try
+                        _revise(
+                            _handle_client,
+                            request.socket,
+                            request.id,
+                            mod,
+                            read_timeout_seconds,
+                            commands,
+                        )
+                    finally
+                        # Always decrement counter when done with a connection
+                        Threads.atomic_sub!(active_connections, 1)
+                    end
                 end
+            catch error
+                @error "Error in worker task" error
             end
-        catch error
-            @error "Error in worker task" error
         end
-    end
+    )
 
     try
         # Simple incrementing ID for request tracking in logs
