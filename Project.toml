@@ -16,7 +16,7 @@ REPLicantReviseExt = "Revise"
 REPLicantTestExt = "Test"
 
 [compat]
-IOCapture = "0.2"
+IOCapture = "0.2, 1"
 Revise = "3"
 Sockets = "1"
 Test = "1"
