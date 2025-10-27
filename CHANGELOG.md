@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v1.1.1] - 2025-11-27
+
 ### Changed
 
 - Server and worker tasks now use `errormonitor` to ensure errors are printed to stderr [#9]
@@ -26,5 +28,6 @@ Initial Public Release
 
 [v1.0.0]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v1.0.0
 [v1.1.0]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v1.1.0
+[v1.1.1]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v1.1.1
 [#4]: https://github.com/MichaelHatherly/REPLicant.jl/issues/4
 [#9]: https://github.com/MichaelHatherly/REPLicant.jl/issues/9
