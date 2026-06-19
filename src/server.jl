@@ -252,7 +252,9 @@ function _accept_loop(server, request_queue, active_connections, srv::Server)
     # Simple incrementing ID for request tracking in logs
     id = 0
     while true
-        sock = Sockets.accept(server)
+        # `listenany` hands back a `TCPServer`, so `accept` yields a `TCPSocket`;
+        # assert it so the socket stays concretely typed through the accept loop.
+        sock = Sockets.accept(server)::Sockets.TCPSocket
         id += 1
 
         # Check if at capacity
