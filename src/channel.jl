@@ -9,7 +9,9 @@ const RPC_CHANNEL = "rpc"
 # bump. The client runs in the default environment (no `--project`) so REPLicant
 # stays out of the worked-on project's dependencies, like Revise; it lives in the
 # global env, where `using REPLicant` resolves for the client.
-_client_script() = joinpath(pkgdir(@__MODULE__), "bin", "client.jl")
+# `pkgdir` is `nothing` only for a module outside a package; REPLicant always
+# loads as one, so assert `String` to keep the path concretely typed.
+_client_script() = joinpath(pkgdir(@__MODULE__)::String, "bin", "client.jl")
 _julia_exe() = joinpath(Sys.BINDIR, Base.julia_exename())
 
 _quiet(cmd::Cmd) = pipeline(cmd; stdout = devnull, stderr = devnull)

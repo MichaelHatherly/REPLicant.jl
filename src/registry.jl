@@ -129,12 +129,17 @@ function label!(name::AbstractString)
     occursin('\n', name) && error("REPLicant label must not contain a newline.")
     srv = CURRENT_SERVER[]
     isnothing(srv) && error("No REPLicant server is running in this session to label.")
-    conflict = _label_conflict(srv.project, name, srv.port)
+    # A recorded server has bound its port and published its details, so these
+    # fields are set; assert it to drop the `nothing` branch from the union.
+    port = srv.port::Int
+    project = srv.project::String
+    started = srv.started::Dates.DateTime
+    conflict = _label_conflict(project, name, port)
     isnothing(conflict) || error(
-        "A REPLicant server in $(srv.project) is already labeled \"$name\" (port $conflict).",
+        "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
     )
-    _write_registry_entry(srv.port, srv.project; name, started = srv.started)
+    _write_registry_entry(port, project; name, started)
     srv.name = name
-    @info "Labeled REPLicant server" port = srv.port name
+    @info "Labeled REPLicant server" port name
     return name
 end
