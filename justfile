@@ -4,26 +4,36 @@ set shell := ["bash", "-c"]
 default:
     just -l
 
-julia code:
-    printf '%s' "{{code}}" | nc localhost $(cat REPLICANT_PORT)
+# Execute Julia code through the running REPLicant server for this project.
+# Pass name=LABEL to target a specific labeled server (see `REPLicant.label!`).
+julia code name="":
+    julia +rpc $([ -n "{{name}}" ] && echo "--name={{name}}") -e "{{code}}"
 
+# List running REPLicant servers.
+ls:
+    julia +rpc ls
+
+# Documentation lookup
 docs binding:
     just julia "@doc {{binding}}"
 
+# Run all tests
 test-all:
-    just julia "@run_package_tests"
+    julia +rpc -e "using TestItemRunner; @run_package_tests"
 
+# Run tests filtered by space-separated tags
 test-tag *tags:
-    just julia "#test-tags {{tags}}"
+    julia +rpc -e 'using TestItemRunner; @run_package_tests filter=ti->issubset(Symbol.(split("{{tags}}")), ti.tags)'
 
+# Run a single test item by name
 test-item item:
-    just julia "#test-item {{item}}"
-
-include-file file:
-    just julia "#include-file {{file}}"
+    julia +rpc -e 'using TestItemRunner; @run_package_tests filter=ti->ti.name == "{{item}}"'
 
 changelog:
     julia --project=.ci .ci/changelog.jl
 
-format:
-    julia --project=.ci .ci/format.jl
+fmt:
+    runic --inplace .
+
+fmt-check:
+    runic --check .

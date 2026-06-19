@@ -58,19 +58,11 @@ end
     @test contains(result, "StackOverflowError")
 end
 
-@testitem "interrupt_exception_handling" tags = [:error_handling] begin
-    # InterruptException should be rethrown according to the code
-    # This is harder to test directly, but we can verify the behavior exists
-    @test_throws InterruptException begin
-        # Simulate what IOCapture.capture does with rethrow = InterruptException
-        try
-            throw(InterruptException())
-        catch e
-            if e isa InterruptException
-                rethrow(e)
-            end
-        end
-    end
+@testitem "interrupt_is_rethrown_from_capture" tags = [:error_handling] begin
+    import REPLicant
+    # `_capture` rethrows InterruptException so long-running code stays
+    # interruptible instead of being swallowed into a captured result.
+    @test_throws InterruptException REPLicant._capture(() -> throw(InterruptException()))
 end
 
 @testitem "error_with_backtrace" tags = [:error_handling] begin

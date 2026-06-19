@@ -41,19 +41,28 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: julia-actions/setup-julia@5c9647d97b78a5debe5164e9eec09d653d29bd71 # v2.6.1
+      - uses: julia-actions/install-juliaup@05d98a2ef433ca0723a8221e38c4723ea92b0c5f # v3.1.4
         with:
-          version: 1
+          channel: '1'
 
       - uses: extractions/setup-just@e33e0265a09d6d736e2ee1e0eb685ef1de4669ff # v3.0.0
 
-      - run: just format
-      - run: git diff --exit-code
+      - name: Install runic
+        run: |
+          julia --project=@runic --startup-file=no -e 'using Pkg; Pkg.add("Runic")'
+          cat > runic <<'SCRIPT'
+          #!/bin/sh
+          export JULIA_LOAD_PATH="@runic"
+          exec julia --startup-file=no -e 'using Runic; exit(Runic.main(ARGS))' -- "$@"
+          SCRIPT
+          chmod +x runic
+          echo "$PWD" >> "$GITHUB_PATH"
+      - run: just fmt-check
 
   test:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    continue-on-error: ${{ matrix.version == 'nightly' }}
+    continue-on-error: ${{ matrix.channel == 'nightly' }}
     strategy:
       fail-fast: false
       matrix:
@@ -61,8 +70,8 @@ jobs:
           - ubuntu-latest
           - windows-latest
           - macOS-latest
-        version:
-          - "min"
+        channel:
+          - "1.10"
           - "1"
           - "nightly"
 
@@ -71,9 +80,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: julia-actions/setup-julia@5c9647d97b78a5debe5164e9eec09d653d29bd71 # v2.6.1
+      - uses: julia-actions/install-juliaup@05d98a2ef433ca0723a8221e38c4723ea92b0c5f # v3.1.4
         with:
-          version: ${{ matrix.version }}
+          channel: ${{ matrix.channel }}
 
       - uses: julia-actions/cache@2b1bf4d8a138668ac719ea7ca149b53ed8d8401e # v2.0.7
 

@@ -1,0 +1,9 @@
+{
+  "name": "replicant",
+  "description": "Evaluate Julia code in a REPLicant session with `julia +rpc`.",
+  "author": {
+    "name": "Michael Hatherly",
+    "email": "michaelhatherly@gmail.com"
+  },
+  "homepage": "https://github.com/MichaelHatherly/REPLicant"
+}
