@@ -26,12 +26,12 @@ PrecompileTools.@setup_workload begin
                             _read_request(sock)
                             write(sock, "ok")
                             flush(sock)
-                        catch
+                        catch  # dendro-ignore: empty_catch -- throwaway acceptor, per-connection errors are irrelevant to precompilation
                         finally
                             close(sock)
                         end
                     end
-                catch
+                catch  # dendro-ignore: empty_catch -- acceptor loop ends when the listener closes
                 end
                 withenv("REPLICANT_DIR" => dir) do
                     _write_registry_entry(port, dir)
@@ -42,7 +42,7 @@ PrecompileTools.@setup_workload begin
                 end
                 close(listener)
             end
-        catch
+        catch  # dendro-ignore: empty_catch -- guard so a sandbox without loopback never fails precompilation
         end
     end
 end

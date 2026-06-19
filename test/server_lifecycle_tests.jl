@@ -124,11 +124,7 @@ end
                 take!(server.channel)
                 @test REPLicant.server() === server
 
-                close(server)
-                try
-                    wait(server.task)
-                catch
-                end
+                Utilities.wait_closed(server)
                 # A stopped server is no longer handed back.
                 @test REPLicant.server() === nothing
             end
@@ -151,7 +147,7 @@ end
     @test contains(sprint(show, MIME("text/plain"), handle[]), "stopped")
 end
 
-@testitem "verbose_logs_lifecycle" tags = [:server_lifecycle] begin
+@testitem "verbose_logs_lifecycle" setup = [Utilities] tags = [:server_lifecycle] begin
     import REPLicant
     import Logging
     import Test
@@ -164,11 +160,7 @@ end
                 Logging.with_logger(logger) do
                     server = REPLicant.Server(; verbose = true)
                     take!(server.channel)
-                    close(server)
-                    try
-                        wait(server.task)
-                    catch
-                    end
+                    Utilities.wait_closed(server)
                 end
                 @test any(r -> contains(r.message, "REPLicant listening"), logger.logs)
             end
@@ -176,7 +168,7 @@ end
     end
 end
 
-@testitem "quiet_by_default" tags = [:server_lifecycle] begin
+@testitem "quiet_by_default" setup = [Utilities] tags = [:server_lifecycle] begin
     import REPLicant
     import Logging
     import Test
@@ -189,11 +181,7 @@ end
                 Logging.with_logger(logger) do
                     server = REPLicant.Server()
                     take!(server.channel)
-                    close(server)
-                    try
-                        wait(server.task)
-                    catch
-                    end
+                    Utilities.wait_closed(server)
                 end
                 @test !any(r -> contains(r.message, "REPLicant listening"), logger.logs)
             end

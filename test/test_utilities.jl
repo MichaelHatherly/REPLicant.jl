@@ -28,6 +28,19 @@
         end
     end
 
+    # Close a server and wait for its task to finish, so a test can inspect
+    # post-shutdown state (the registry entry removed, the handle reporting
+    # stopped). `close` schedules an InterruptException into the task that `wait`
+    # re-raises; swallowing it is the expected path.
+    function wait_closed(server)
+        close(server)
+        try
+            wait(server.task)
+        catch  # dendro-ignore: empty_catch -- close schedules the InterruptException wait re-raises
+        end
+        return nothing
+    end
+
     # Start a server in an isolated temporary project with its own registry
     # directory, so tests neither see each other's servers nor touch the real
     # registry.
@@ -54,11 +67,7 @@
                         finally
                             # Wait for shutdown so the registry entry is gone
                             # before the test inspects it.
-                            close(server)
-                            try
-                                wait(server.task)
-                            catch
-                            end
+                            wait_closed(server)
                         end
                     end
                 end
@@ -88,11 +97,7 @@
                             func(start, registry)
                         finally
                             for server in servers
-                                close(server)
-                                try
-                                    wait(server.task)
-                                catch
-                                end
+                                wait_closed(server)
                             end
                         end
                     end
