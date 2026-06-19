@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Run servers behind a `julia +rpc` channel backed by a central registry: clients discover and route to running servers by project, with several labeled servers per project selectable via `--name` (`REPLicant.label!`) [#19]
+- Add a `replicant` plugin so coding agents can install REPLicant and evaluate Julia through `julia +rpc` [#19]
+- Add `save` and `verbose` keywords to `Server`, plus `REPLicant.server()` to recover a handle saved with `save = true` [#19]
+
+### Changed
+
+- Replace the netcat client and `REPLICANT_PORT` file with a precompiled Julia client and a length-prefixed wire protocol [#19]
+- Depend only on the standard library plus `PrecompileTools`, removing the IOCapture dependency [#19]
+
+### Removed
+
+- Remove the custom command syntax (`#test-item`, `#test-tags`, `#include-file`) [#19]
+
 ## [v1.1.1] - 2025-11-27
 
 ### Changed
@@ -31,3 +46,4 @@ Initial Public Release
 [v1.1.1]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v1.1.1
 [#4]: https://github.com/MichaelHatherly/REPLicant.jl/issues/4
 [#9]: https://github.com/MichaelHatherly/REPLicant.jl/issues/9
+[#19]: https://github.com/MichaelHatherly/REPLicant.jl/issues/19

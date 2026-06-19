@@ -1,0 +1,15 @@
+{
+  "name": "replicant",
+  "owner": {
+    "name": "Michael Hatherly",
+    "email": "michaelhatherly@gmail.com"
+  },
+  "description": "Run Julia in a REPLicant session via `julia +rpc`.",
+  "plugins": [
+    {
+      "name": "replicant",
+      "source": "./plugins/replicant",
+      "description": "Evaluate Julia code in a REPLicant session with `julia +rpc`."
+    }
+  ]
+}

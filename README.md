@@ -9,219 +9,197 @@
 ╚═╝  ╚═╝╚══════╝╚═╝     ╚══════╝╚═╝ ╚═════╝╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝
 ```
 
-REPLicant provides a Julia socket server that enables running code from
-CLI-based tools and coding agents. This allows for quick feedback loops to
-allow tools such as Claude Code to execute Julia code without the overhead of
-starting up a new Julia process each time.
-
-## Overview
-
-REPLicant creates a socket-based server that maintains a live Julia session,
-allowing external tools to execute Julia code without repeatedly paying Julia's
-startup cost. This is particularly useful for coding assistants, automation
-tools, and any scenario where you need to run many small Julia snippets
-quickly.
-
-## Why REPLicant?
-
-Julia can have significant startup latency for some tasks, making it
-impractical for tools that need to execute many small code snippets.
-Traditional approaches that spawn a new `julia` process for each execution
-become prohibitively slow. REPLicant solves this by:
-
-- Maintaining a persistent Julia session that stays warm
-- Accepting code via socket connections for immediate execution
-- Preserving state between executions within the same session
-- Integrating with Revise.jl for automatic code reloading during development
+Julia's startup and compilation latency makes a fresh process per snippet too
+slow for tools that run many small evaluations. REPLicant keeps one Julia process
+warm as a socket server and reuses it. `julia +rpc <args>` forwards code to the
+server for the current project, prints the result, and pays the cold start once.
+State survives between calls.
 
 ## Installation
 
+Install REPLicant into the default (global) environment, like Revise. The `julia
++rpc` client runs with no `--project` and resolves `using REPLicant` from there:
+
 ```julia
 using Pkg
-Pkg.add("https://github.com/MichaelHatherly/REPLicant.jl")
+Pkg.add("REPLicant")
 ```
+
+Then link the `julia +rpc` channel once:
+
+```julia
+using REPLicant
+REPLicant.install_channel()
+```
+
+## Use with coding agents (Claude Code / Codex)
+
+REPLicant ships a skill through the Claude Code and Codex plugin systems. The
+skill teaches an agent to install REPLicant and drive `julia +rpc`, so setup is a
+single request rather than a checklist.
+
+### Add the skill
+
+Claude Code:
+
+```
+/plugin marketplace add MichaelHatherly/REPLicant
+/plugin install replicant@replicant
+```
+
+Codex:
+
+```
+/plugin marketplace add MichaelHatherly/REPLicant
+/plugin install replicant@replicant
+/reload-plugins
+```
+
+### Install and verify
+
+With the skill available, ask the agent:
+
+> Install REPLicant and confirm `julia +rpc` works.
+
+The skill installs into the global environment, links the `rpc` channel, wires
+the startup.jl auto-start, and runs a self-test (`julia +rpc ls` and `julia +rpc
+-e '1 + 1'`).
 
 ## Usage
 
-A `justfile` is required in the root of your project for `Server` to start up
-and correctly detect the project.
+### Start a server
 
-### Setting up your project
-
-REPLicant provides a convenient function to set up or update your project's
-`justfile` with useful recipes:
+A server stays alive as long as its Julia process. The usual setup is startup.jl:
+open an interactive `julia` inside a project and it serves that project. To start
+one by hand:
 
 ```julia
 using REPLicant
 
-# Create or update justfile with REPLicant recipes
-REPLicant.justfile()
+REPLicant.Server()                 # quiet
+REPLicant.Server(verbose = true)   # log lifecycle and per-connection events
 ```
 
-This will:
-- Create a new `justfile` if none exists, or
-- Append REPLicant recipes to an existing justfile (if it doesn't already have a `julia` recipe)
-- Add recipes for:
-  - `julia code`: Execute Julia code through REPLicant
-  - `docs binding`: Look up documentation
-  - `test-all`: Run all tests
-  - `test-item item`: Run a specific test item (uses `#test-item` command)
-  - `test-tag tags...`: Run tests with specific tags (uses `#test-tags` command)
-  - `include-file file`: Include a Julia file (uses `#include-file` command)
+`Server` keywords: `max_connections` (default 100), `read_timeout_seconds`
+(default 30.0), `save` (default false, store the handle for `REPLicant.server()`),
+`verbose` (default false, errors always log).
 
-The function supports all standard justfile naming conventions (`justfile`, `Justfile`, `.justfile`, etc.).
+### Evaluate code
 
-### Starting the Server
-
-```julia
-using REPLicant
-
-# Start with default settings (max 100 concurrent connections)
-server = REPLicant.Server()
-
-# Or with custom connection limit
-server = REPLicant.Server(; max_connections = 50)
-```
-
-The server will:
-
-1. Start listening on an available port (beginning at 8000)
-2. Create a `REPLICANT_PORT` file containing the port number
-3. Log the connection details
-4. Enforce connection limits to prevent resource exhaustion
-
-### Executing Code
-
-With the server running, you can execute Julia code from any CLI tool that
-supports sending strings over TCP sockets. For example, you can use `nc` to
-handle the socket communication.
-
-```just
-julia code:
-    printf '%s' "{{code}}" | nc localhost $(cat REPLICANT_PORT)
-```
+Use a heredoc with a quoted delimiter for anything beyond a trivial expression:
 
 ```bash
-just julia "@run_package_tests"
+julia +rpc <<'EOF'
+v = filter(isodd, 1:10)
+sum(v)
+EOF
 ```
 
-### Stopping the Server
+One-liners can use `-e`:
+
+```bash
+julia +rpc -e '6 * 7'
+julia +rpc -e 'println("hi"); 1 + 1'
+```
+
+Output is REPL-style: captured stdout and stderr first, then the value, or a
+scrubbed error with backtrace.
+
+### Session state
+
+The server evaluates into a persistent `Main`, so bindings survive across calls:
+
+```bash
+julia +rpc -e 'x = [i^2 for i in 1:5]'   # define
+julia +rpc -e 'sum(x)'                    # x is still in scope -> 55
+```
+
+`Main` is shared mutable state. Restart the server for a clean slate.
+
+### Find and select servers
+
+```bash
+julia +rpc ls
+```
+
+Lists every live server: `PORT NAME PROJECT JULIA PID STARTED`. A server is
+rooted at the project it started in (git top-level, else the working directory).
+`julia +rpc` from inside that tree selects it, automatically when the project has
+one server. Disambiguate with:
+
+- `--name <label>`: pick a labeled server
+- `--port <n>`: target a specific port
+- `--project <path>`: select by project root (defaults to the current directory)
+
+Label the current process's server, then route to it by name:
+
+```bash
+julia +rpc -e 'REPLicant.label!("main")'
+julia +rpc --name=main -e '21 * 2'
+```
+
+Each label is unique among live servers for a project.
+
+### Inspect a server
+
+A server started with `save = true` (as the recommended startup.jl does) holds a
+handle in its session:
+
+```julia
+REPLicant.server()        # the running Server, or nothing
+close(REPLicant.server()) # stop it
+```
+
+Showing the handle reports port, project, name, start time, and limits.
+
+### Stop a server
 
 ```julia
 close(server)
 ```
 
-This will close the socket and clean up the `REPLICANT_PORT` file. When `julia`
-is closed the server will automatically stop, so you can also just exit the
-REPL and the server will shut down gracefully.
+This removes the server's registry entry. Exiting the Julia process stops the
+server and cleans up the same way.
 
-## How It Works
+## How it works
 
-1. **Socket Server**: REPLicant creates a TCP server that listens for incoming
-   connections
-2. **Code Evaluation**: Received code strings are evaluated in the active
-   module using `include_string`
-3. **Output Capture**: Both stdout and return values are captured using
-   IOCapture
-4. **Error Handling**: Errors are caught and formatted similarly to the Julia
-   REPL
-5. **State Persistence**: The Julia session remains active between connections,
-   preserving variables and loaded packages since it is a live REPL
+1. The server lets the OS pick a free port from 8000 and listens for
+   length-prefixed requests.
+2. It registers itself in a shared directory (`$REPLICANT_DIR`, else
+   `tempdir()/replicant`), one `key=value` file per live server. The client reads
+   that directory to find and select a target.
+3. Code runs in a persistent module with `include_string`, so state survives
+   between calls.
+4. With Revise loaded, changed code reloads before each request.
 
-## Custom Commands
-
-REPLicant supports special command syntax that begins with `#`. These commands
-provide additional functionality beyond simple code evaluation.
-
-### Built-in Commands
-
-REPLicant includes several built-in commands:
-
-- `#include-file <path>` - Include a Julia file relative to the project root
-  ```bash
-  just julia "#include-file src/utilities.jl"
-  ```
-
-- `#test-item <name>` - Run a specific test item by name (requires TestItemRunner)
-  ```bash
-  just julia "#test-item my_test_case"
-  ```
-
-- `#test-tags <tag1> <tag2>...` - Run tests matching all specified tags
-  ```bash
-  just julia "#test-tags unit integration"
-  ```
-
-### Creating Custom Commands
-
-You can register custom commands when starting the server:
-
-```julia
-using REPLicant
-
-# Define custom commands
-commands = Dict{String,Function}(
-    # Simple command that echoes back the input
-    "echo" => (code, id, mod) -> () -> "Echo: $code",
-    
-    # Command that evaluates code multiple times
-    "repeat" => (code, id, mod) -> begin
-        n, expr = split(code, ' ', limit=2)
-        () -> [include_string(mod, expr, "REPL[$id]") for _ in 1:parse(Int, n)]
-    end,
-    
-    # Command that modifies server state
-    "load-pkg" => (code, id, mod) -> begin
-        pkg = strip(code)
-        () -> Core.eval(mod, Meta.parse("using $pkg"))
-    end
-)
-
-# Start server with custom commands
-server = REPLicant.Server(; commands)
-```
-
-Command functions receive three arguments:
-- `code`: The command arguments as a string (everything after the command name)
-- `id`: The request ID for logging
-- `mod`: The active module context
-
-The function must return a thunk (zero-argument function) that performs the
-actual command action. The thunk's return value and any stdout output will be
-captured and sent back to the client.
-
-### Command Naming
-
-- Command names must start with a lowercase letter and can contain lowercase letters and hyphens
-- The regex pattern for valid commands is: `^#([a-z][a-z\-]+)\s+`
-- Invalid command names will cause the line to be evaluated as regular Julia code
-
-## Risks and Considerations
+## Risks and considerations
 
 ### Security
 
-**REPLicant executes arbitrary code with full system access**
+REPLicant executes arbitrary code with full system access.
 
-- Only run REPLicant in trusted environments
-- The server has no authentication or authorization mechanisms
+- Only run it in trusted environments
+- The server has no authentication or authorization
 - Executed code has the same permissions as the Julia process
 
 ### Concurrency
 
-- Each client connection is handled in a separate task
-- Concurrent requests may interfere with each other's global state
-- Connection limits prevent resource exhaustion (default: 100 concurrent connections)
-- When at capacity, new connections receive: "ERROR: Server at capacity, please retry"
+- Each connection is handled in a separate task
+- Concurrent requests share global state and can interfere
+- `max_connections` (default 100) bounds concurrent connections
+- At capacity, new connections receive `ERROR: Server at capacity, please retry`
 
 ## Development
 
-### Running Tests
+### Running tests
 
 ```bash
 just test-all
 ```
 
-### Integration with Revise.jl
+### Formatting
 
-REPLicant automatically integrates with Revise.jl when available, allowing code
-changes to be reflected without restarting the server.
+```bash
+just fmt         # format in-place with Runic
+just fmt-check   # check formatting (CI)
+```

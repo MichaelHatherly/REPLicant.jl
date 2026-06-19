@@ -1,0 +1,16 @@
+{
+  "name": "replicant",
+  "interface": {
+    "displayName": "REPLicant"
+  },
+  "plugins": [
+    {
+      "name": "replicant",
+      "source": {
+        "source": "local",
+        "path": "./plugins/replicant"
+      },
+      "description": "Evaluate Julia code in a REPLicant session with `julia +rpc`."
+    }
+  ]
+}

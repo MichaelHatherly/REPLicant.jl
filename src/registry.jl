@@ -1,0 +1,140 @@
+#
+# Server registry.
+#
+
+# All live servers register here so clients discover them in one place,
+# regardless of which project each server runs in.
+function _registry_dir()
+    dir = get(ENV, "REPLICANT_DIR", joinpath(tempdir(), "replicant"))
+    mkpath(dir)
+    return dir
+end
+
+_registry_entry_path(port::Integer) = joinpath(_registry_dir(), string(port))
+
+function _registry_entry(
+        port::Integer,
+        project::AbstractString;
+        name::AbstractString = "",
+        started = Dates.now(),
+    )
+    entry = """
+    port=$port
+    project=$project
+    pid=$(getpid())
+    julia=$(VERSION)
+    version=$(pkgversion(@__MODULE__))
+    started=$started
+    """
+    isempty(name) || (entry *= "name=$name\n")
+    return entry
+end
+
+function _parse_registry_entry(path::AbstractString)
+    fields = Dict{String, String}()
+    for line in eachline(path)
+        isempty(strip(line)) && continue
+        parts = split(line, '='; limit = 2)
+        length(parts) == 2 || continue
+        fields[parts[1]] = parts[2]
+    end
+    return fields
+end
+
+# Write atomically so clients never read a partial entry. The OS just handed
+# us this port, so force-overwriting any stale same-port entry is correct.
+function _write_registry_entry(
+        port::Integer,
+        project::AbstractString;
+        name::AbstractString = "",
+        started = Dates.now(),
+    )
+    path = _registry_entry_path(port)
+    temp = "$path.tmp.$(getpid())"
+    try
+        open(temp, "w") do io
+            write(io, _registry_entry(port, project; name, started))
+        end
+        mv(temp, path; force = true)
+    catch error
+        isfile(temp) && rm(temp; force = true)
+        rethrow(error)
+    end
+    return path
+end
+
+# Probe a server by sending a zero-length request (the health no-op). Matches
+# the cross-platform liveness check the CLI uses for `ls`.
+function _ping(port::Integer)
+    try
+        sock = Sockets.connect(Sockets.localhost, port)
+        try
+            write(sock, "0\n")
+            flush(sock)
+            read(sock)
+            return true
+        finally
+            close(sock)
+        end
+    catch
+        return false
+    end
+end
+
+# Drop registry entries for this project whose servers no longer answer a ping.
+# Replaces the old per-project lock: several live servers per project coexist.
+function _prune_dead_entries(project::AbstractString)
+    dir = _registry_dir()
+    for fname in readdir(dir)
+        path = joinpath(dir, fname)
+        isfile(path) || continue
+        fields = _parse_registry_entry(path)
+        get(fields, "project", nothing) == project || continue
+        port = tryparse(Int, get(fields, "port", ""))
+        isnothing(port) && continue
+        _ping(port) || rm(path; force = true)
+    end
+    return
+end
+
+# Return the port of a live server in `project` already labeled `name`, skipping
+# our own `skip_port`. Pings only matching entries, so it stays cheap and never
+# probes our own busy worker. `nothing` when the label is free.
+function _label_conflict(project::AbstractString, name::AbstractString, skip_port::Integer)
+    dir = _registry_dir()
+    for fname in readdir(dir)
+        path = joinpath(dir, fname)
+        isfile(path) || continue
+        fields = _parse_registry_entry(path)
+        get(fields, "project", nothing) == project || continue
+        get(fields, "name", "") == name || continue
+        port = tryparse(Int, get(fields, "port", ""))
+        (isnothing(port) || port == skip_port) && continue
+        _ping(port) && return port
+    end
+    return nothing
+end
+
+"""
+    label!(name::AbstractString) -> String
+
+Label the REPLicant server running in this process so clients can select it with
+`--name`. Run it at the REPL, or send `REPLicant.label!("name")` over the eval
+channel so an agent labels a server it reaches by `--port`.
+
+Errors when no server is running in this session, when `name` contains a newline,
+or when another live server in the same project already holds `name`.
+"""
+function label!(name::AbstractString)
+    occursin('\n', name) && error("REPLicant label must not contain a newline.")
+    srv = CURRENT_SERVER[]
+    isnothing(srv) && error("No REPLicant server is running in this session to label.")
+    conflict = _label_conflict(srv.project, name, srv.port)
+    isnothing(conflict) || error(
+        "A REPLicant server in $(srv.project) is already labeled \"$name\" (port $conflict).",
+    )
+    _write_registry_entry(srv.port, srv.project; name, started = srv.started)
+    srv.name = name
+    @info "Labeled REPLicant server" port = srv.port name
+    return name
+end
