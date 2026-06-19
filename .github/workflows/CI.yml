@@ -20,17 +20,19 @@ permissions:
 jobs:
   finalize:
     timeout-minutes: 10
-    needs: [format, test]
+    needs: [format, test, dendro]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - run: |
           echo format: ${{ needs.format.result }}
           echo test: ${{ needs.test.result }}
+          echo dendro: ${{ needs.dendro.result }}
       - run: exit 1
         if: |
           (needs.format.result != 'success') ||
-          (needs.test.result != 'success')
+          (needs.test.result != 'success') ||
+          (needs.dendro.result != 'success')
 
   format:
     timeout-minutes: 20
@@ -97,3 +99,24 @@ jobs:
           verbose: true
           files: lcov.info
           token: ${{ secrets.CODECOV_TOKEN }}
+
+  dendro:
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - uses: julia-actions/install-juliaup@05d98a2ef433ca0723a8221e38c4723ea92b0c5f # v3.1.4
+        with:
+          channel: '1.12'
+
+      - uses: julia-actions/cache@2b1bf4d8a138668ac719ea7ca149b53ed8d8401e # v2.0.7
+
+      - name: Instantiate analysis environment
+        run: julia --project=test/dendro -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Run Dendro over REPLicant source
+        run: julia --project=test/dendro test/dendro/dendro.jl

@@ -29,6 +29,11 @@ test-tag *tags:
 test-item item:
     julia +rpc -e 'using TestItemRunner; @run_package_tests filter=ti->ti.name == "{{item}}"'
 
+# Run Dendro code-quality analysis over REPLicant's own source (separate Julia 1.12 environment)
+dendro:
+    julia +1.12 --project=test/dendro -e 'using Pkg; Pkg.instantiate()'
+    julia +1.12 --project=test/dendro test/dendro/dendro.jl
+
 changelog:
     julia --project=.ci .ci/changelog.jl
 
