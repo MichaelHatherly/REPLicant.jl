@@ -127,12 +127,15 @@ registry entry.
 Base.close(server::Server) = schedule(server.task, InterruptException(); error = true)
 
 function _server(srv::Server)
-    channel = srv.channel
-    mod = srv.mod
-    max_connections = srv.max_connections
-    read_timeout_seconds = srv.read_timeout_seconds
-    verbose = srv.verbose
+    server, port_number, entry_path = _listen_and_register!(srv)
+    # Signal readiness now that the registry entry exists.
+    put!(srv.channel, port_number)
+    return _serve(server, srv, entry_path)
+end
 
+# Bind a listener, register it, and publish its runtime details on the handle.
+# Returns the listener, its port, and its registry entry path.
+function _listen_and_register!(srv::Server)
     # Root the server at the enclosing project. Clients select by this path.
     project = _project_root()
 
@@ -151,93 +154,40 @@ function _server(srv::Server)
     srv.port = port_number
     srv.project = project
     srv.started = started
-    verbose && @info "REPLicant listening" port_number project entry_path
-
-    function shutdown()
-        close(server)
-        # Forget this process's server so a later `label!` can't rewrite a
-        # removed entry.
-        CURRENT_SERVER[] === srv && (CURRENT_SERVER[] = nothing)
-        # Always remove the registry entry to keep the registry clean.
-        return if isfile(entry_path)
-            rm(entry_path; force = true)
-            verbose && @info "Removed registry entry" entry_path
-        end
-    end
+    srv.verbose && @info "REPLicant listening" port_number project entry_path
 
     # Ensure cleanup happens even if the Julia process is terminated.
     atexit() do
         try
-            shutdown()
+            _shutdown_server(server, srv, entry_path)
         catch error
             # Use @debug to avoid noise during forced shutdowns
             @debug "Error during shutdown" error
         end
     end
 
-    put!(channel, port_number)
+    return server, port_number, entry_path
+end
 
+# Run the accept loop with its worker, draining and shutting down on exit.
+function _serve(server, srv::Server, entry_path)
     # Queue accepted requests for the worker. Sized to `max_connections` so the
     # accept loop never blocks on `put!` before the capacity check can reject.
-    request_queue = Channel{ClientRequest}(max_connections)
+    request_queue = Channel{ClientRequest}(srv.max_connections)
 
     # Track active connections to enforce limits
     active_connections = Threads.Atomic{Int}(0)
 
     # Start the worker task that processes requests sequentially
-    worker = errormonitor(
-        Threads.@spawn begin
-            try
-                for request in request_queue
-                    try
-                        _revise(
-                            _handle_client,
-                            request.socket,
-                            request.id,
-                            mod,
-                            read_timeout_seconds,
-                            verbose,
-                        )
-                    finally
-                        # Always decrement counter when done with a connection
-                        Threads.atomic_sub!(active_connections, 1)
-                    end
-                end
-            catch error
-                @error "Error in worker task" error
-            end
-        end
-    )
+    worker = _spawn_worker(request_queue, active_connections, srv)
 
     return try
-        # Simple incrementing ID for request tracking in logs
-        id = 0
-        while true
-            sock = Sockets.accept(server)
-            id += 1
-
-            # Check if at capacity
-            if active_connections[] >= max_connections
-                verbose && @warn "Connection rejected - server at capacity" id current =
-                    active_connections[] max = max_connections
-                # Reject off the accept loop so draining the request never blocks
-                # accepting other connections.
-                @async _reject_at_capacity(sock, id, read_timeout_seconds)
-            else
-                # Accept connection and increment counter
-                Threads.atomic_add!(active_connections, 1)
-                verbose &&
-                    @info "Client connected" id peer = Sockets.getpeername(sock) active =
-                    active_connections[]
-                request = ClientRequest(sock, id)
-                put!(request_queue, request)
-            end
-        end
+        _accept_loop(server, request_queue, active_connections, srv)
     catch error
         # A closed listener (`close`/atexit) surfaces as IOError from `accept`;
         # an explicit shutdown surfaces as InterruptException. Both are normal.
         if isa(error, InterruptException) || isa(error, Base.IOError)
-            verbose && @info "Server shutting down"
+            srv.verbose && @info "Server shutting down"
         else
             @error "Unexpected error in server loop" error
         end
@@ -253,6 +203,74 @@ function _server(srv::Server)
         end
 
         # Ensure cleanup runs even if the server loop fails
-        shutdown()
+        _shutdown_server(server, srv, entry_path)
     end
+end
+
+# Close the listener, drop this process's handle, and remove the registry entry.
+function _shutdown_server(listener, srv, entry_path)
+    close(listener)
+    # Forget this process's server so a later `label!` can't rewrite a
+    # removed entry.
+    CURRENT_SERVER[] === srv && (CURRENT_SERVER[] = nothing)
+    # Always remove the registry entry to keep the registry clean.
+    return if isfile(entry_path)
+        rm(entry_path; force = true)
+        srv.verbose && @info "Removed registry entry" entry_path
+    end
+end
+
+# Worker task: evaluate queued requests sequentially in the persistent module.
+function _spawn_worker(request_queue, active_connections, srv::Server)
+    return errormonitor(
+        Threads.@spawn begin
+            try
+                for request in request_queue
+                    try
+                        _revise(
+                            _handle_client,
+                            request.socket,
+                            request.id,
+                            srv.mod,
+                            srv.read_timeout_seconds,
+                            srv.verbose,
+                        )
+                    finally
+                        # Always decrement counter when done with a connection
+                        Threads.atomic_sub!(active_connections, 1)
+                    end
+                end
+            catch error
+                @error "Error in worker task" error
+            end
+        end
+    )
+end
+
+# Accept connections forever, queuing each for the worker; reject at capacity.
+function _accept_loop(server, request_queue, active_connections, srv::Server)
+    # Simple incrementing ID for request tracking in logs
+    id = 0
+    while true
+        sock = Sockets.accept(server)
+        id += 1
+
+        # Check if at capacity
+        if active_connections[] >= srv.max_connections
+            srv.verbose && @warn "Connection rejected - server at capacity" id current =
+                active_connections[] max = srv.max_connections
+            # Reject off the accept loop so draining the request never blocks
+            # accepting other connections.
+            @async _reject_at_capacity(sock, id, srv.read_timeout_seconds)
+        else
+            # Accept connection and increment counter
+            Threads.atomic_add!(active_connections, 1)
+            srv.verbose &&
+                @info "Client connected" id peer = Sockets.getpeername(sock) active =
+                active_connections[]
+            request = ClientRequest(sock, id)
+            put!(request_queue, request)
+        end
+    end
+    return
 end

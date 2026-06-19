@@ -114,6 +114,14 @@ function _resolve_port(port::Integer, project::AbstractString, name::AbstractStr
     throw(_candidates_error(live, "could not pick a server for $target"))
 end
 
+# Consume the value following a flag at `index`, erroring when the flag ends the
+# argument list. Returns the value and the advanced index.
+function _take_value(args, index, flag)
+    index += 1
+    index > length(args) && error("$flag needs a value")
+    return args[index], index
+end
+
 function _parse_client_args(args)
     port = -1
     project = ""
@@ -125,25 +133,18 @@ function _parse_client_args(args)
         if startswith(arg, "--port=")
             port = _parse_port(arg[(length("--port=") + 1):end])
         elseif arg == "--port"
-            index += 1
-            index > length(args) && error("--port needs a value")
-            port = _parse_port(args[index])
+            value, index = _take_value(args, index, "--port")
+            port = _parse_port(value)
         elseif startswith(arg, "--project=")
             project = arg[(length("--project=") + 1):end]
         elseif arg == "--project"
-            index += 1
-            index > length(args) && error("--project needs a value")
-            project = args[index]
+            project, index = _take_value(args, index, "--project")
         elseif startswith(arg, "--name=")
             name = arg[(length("--name=") + 1):end]
         elseif arg == "--name"
-            index += 1
-            index > length(args) && error("--name needs a value")
-            name = args[index]
+            name, index = _take_value(args, index, "--name")
         elseif arg == "-e" || arg == "--eval"
-            index += 1
-            index > length(args) && error("-e needs a value")
-            code = args[index]
+            code, index = _take_value(args, index, "-e")
         else
             error("unrecognized argument: $arg")
         end
