@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Gate CI on a Dendro code-quality scan of the package source: a separate Julia 1.12 job fails the build on high-complexity bands or duplicate, stub, and swallowed-error flags [#28]
+
 ## [v2.0.0] - 2026-06-19
 
 ### Added
@@ -53,3 +57,4 @@ Initial Public Release
 [#9]: https://github.com/MichaelHatherly/REPLicant.jl/issues/9
 [#19]: https://github.com/MichaelHatherly/REPLicant.jl/issues/19
 [#21]: https://github.com/MichaelHatherly/REPLicant.jl/issues/21
+[#28]: https://github.com/MichaelHatherly/REPLicant.jl/issues/28
