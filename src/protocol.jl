@@ -126,7 +126,7 @@ function _reject_at_capacity(sock::IO, id, read_timeout_seconds)
     end
 end
 
-function _handle_client(sock::IO, id, mod, read_timeout_seconds, verbose)
+function _handle_client(sock::IO, id::Integer, mod::Union{Module, Nothing}, read_timeout_seconds, verbose)
     return try
         frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds = read_timeout_seconds)
 
@@ -148,8 +148,7 @@ function _handle_client(sock::IO, id, mod, read_timeout_seconds, verbose)
         @error "Error handling client" id error
         try
             # Inform the client about a protocol or framing error.
-            message = error isa ErrorException ? error.msg : sprint(showerror, error)
-            _write_frame(sock, RESPONSE_ERR, message)
+            _write_frame(sock, RESPONSE_ERR, sprint(showerror, error))
         catch error
             # Client disconnected before we could send the error.
             @error "Failed to send error frame to client" id error

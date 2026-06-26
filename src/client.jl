@@ -163,7 +163,7 @@ end
 # not run into the shell prompt. Tolerates a reader that closed early (e.g.
 # `| head`): an EPIPE on a closed output pipe is the reader's choice, not a
 # client error.
-function _write_payload(io::IO, payload::AbstractString)
+function _write_payload(io::IO, payload::String)
     try
         write(io, payload)
         isempty(payload) || endswith(payload, '\n') || write(io, '\n')
@@ -175,7 +175,7 @@ end
 
 # Send an eval frame and route the response: `ok` to `out`, `err` to `err`.
 # Returns a process exit code, non-zero when the evaluation errored.
-function _send(port::Integer, code::AbstractString; out::IO = stdout, err::IO = stderr)
+function _send(port::Integer, code::String; out::IO = stdout, err::IO = stderr)
     sock = Sockets.connect(Sockets.localhost, port)
     try
         _write_frame(sock, REQUEST_EVAL, code)
