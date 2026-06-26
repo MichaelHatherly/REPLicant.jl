@@ -273,6 +273,23 @@ const REMOTE_EVAL_DEPTH = Threads.Atomic{Int}(0)
 # thread by the prompt; the atomic gives a consistent value.
 _is_busy() = REMOTE_EVAL_DEPTH[] > 0
 
+# One animation frame of a busy prompt, generic across REPL modes. `base` is the
+# idle prompt text (`"julia> "`, `"pkg> "`, `"help?> "`, ...); `marker` is its
+# last non-blank glyph, the `>`-style cursor common to every mode. A `_` sweeps
+# through the label before the marker, swapping one width-1 glyph for another, so
+# `textwidth(base)` holds and the cursor never shifts.
+function _busy_frame(base::AbstractString, n::Int)
+    chars = collect(Char, base)
+    marker = length(chars)
+    while marker > 0 && isspace(chars[marker])
+        marker -= 1
+    end
+    marker == 0 && return String(chars)
+    span = max(marker - 1, 1)
+    chars[mod(n, span) + 1] = '_'
+    return String(chars)
+end
+
 # Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
 # `__notify_busy(::Nothing)` to recolor the prompt and set the terminal title.
 # Without REPL the `::Any` fallback does nothing.
