@@ -22,8 +22,9 @@ evaluates code from clients until closed.
 Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
 byte, then a big-endian `UInt32` body length) followed by the body. Requests are
 `eval` (body is code) or `ping`; responses are `ok`/`err` (body is the result or
-error text) or `pong`. Every frame is validated for magic, version, type, and a
-16 MB length cap before its body is trusted.
+error text) or `pong` (body is the worker's busy-since timestamp, empty when
+idle). Every frame is validated for magic, version, type, and a 16 MB length cap
+before its body is trusted.
 
 # Example
 ```julia
@@ -50,6 +51,9 @@ mutable struct Server
     project::Union{String, Nothing}
     started::Union{Dates.DateTime, Nothing}
     name::String
+    # When the worker is mid-evaluation, the time it started; `nothing` when idle.
+    # Written only by the single worker task, read by ping responders for `ls`.
+    busy_since::Union{Dates.DateTime, Nothing}
 
     function Server(
             mod = nothing;
@@ -69,6 +73,7 @@ mutable struct Server
         srv.project = nothing
         srv.started = nothing
         srv.name = ""
+        srv.busy_since = nothing
         srv.task = errormonitor(@async _server(srv))
         # Tie the channel's lifetime to the task so a startup failure closes the
         # channel and surfaces the error to `take!` instead of blocking forever.
@@ -234,6 +239,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
         Threads.@spawn begin
             try
                 for request in request_queue
+                    srv.busy_since = Dates.now()
                     try
                         _revise(
                             _handle_eval,
@@ -244,6 +250,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                             srv.verbose,
                         )
                     finally
+                        srv.busy_since = nothing
                         # Always decrement counter when done with a connection
                         Threads.atomic_sub!(active_connections, 1)
                     end
@@ -293,6 +300,10 @@ function _admit(
     return
 end
 
+# The pong body: the worker's busy-since timestamp, or empty when idle. Clients
+# render it in `ls` to tell a wedged server from an idle one.
+_busy_marker(srv::Server) = isnothing(srv.busy_since) ? "" : string(srv.busy_since)
+
 # Per-connection dispatcher. Reads one frame, answers a ping immediately so
 # liveness never queues behind an evaluation, and hands an eval to the worker.
 # Pings, framing errors, and bare disconnects release the connection here; the
@@ -307,7 +318,7 @@ function _dispatch(
         if isnothing(frame)
             return  # bare disconnect, nothing to reply to
         elseif frame.type == REQUEST_PING
-            _write_frame(sock, RESPONSE_PONG, "")
+            _write_frame(sock, RESPONSE_PONG, _busy_marker(srv))
             srv.verbose && @info "Answered ping" id
         else
             put!(request_queue, ClientRequest(sock, id, frame.body))

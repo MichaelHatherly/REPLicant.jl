@@ -1,27 +1,103 @@
 @testitem "client_arg_parsing" tags = [:cli] begin
     import REPLicant
 
-    basic = REPLicant._parse_client_args(["--port=8000", "-e", "x"])
+    basic = REPLicant._parse_args(["--port=8000", "-e", "x"])
     @test basic.port == 8000
     @test basic.code == "x"
     @test basic.project == ""
     @test basic.name == ""
 
     spaced =
-        REPLicant._parse_client_args(["--port", "8001", "--project", "p", "--name", "n"])
+        REPLicant._parse_args(["--port", "8001", "--project", "p", "--name", "n"])
     @test spaced.port == 8001
     @test spaced.project == "p"
     @test spaced.name == "n"
     @test isnothing(spaced.code)
 
-    joined = REPLicant._parse_client_args(["--project=/tmp/x", "--name=lbl", "--eval", "1"])
+    joined = REPLicant._parse_args(["--project=/tmp/x", "--name=lbl", "--eval", "1"])
     @test joined.project == "/tmp/x"
     @test joined.name == "lbl"
     @test joined.code == "1"
 
-    @test_throws Exception REPLicant._parse_client_args(["--port=abc"])
-    @test_throws Exception REPLicant._parse_client_args(["--port"])
-    @test_throws Exception REPLicant._parse_client_args(["--bogus"])
+    @test_throws Exception REPLicant._parse_args(["--port=abc"])
+    @test_throws Exception REPLicant._parse_args(["--port"])
+    @test_throws Exception REPLicant._parse_args(["--bogus"])
+end
+
+@testitem "client_timeout_parsing" tags = [:cli] begin
+    import REPLicant
+
+    # No --timeout means no bound: the client waits as long as the eval runs.
+    @test isnothing(REPLicant._parse_args(["-e", "1"]).timeout)
+
+    @test REPLicant._parse_args(["--timeout=2.5", "-e", "1"]).timeout == 2.5
+    @test REPLicant._parse_args(["--timeout", "3", "-e", "1"]).timeout == 3.0
+
+    @test_throws Exception REPLicant._parse_args(["--timeout=abc"])
+    @test_throws Exception REPLicant._parse_args(["--timeout=0"])
+    @test_throws Exception REPLicant._parse_args(["--timeout=-1"])
+    @test_throws Exception REPLicant._parse_args(["--timeout"])
+end
+
+@testitem "client_timeout_frees_caller" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        err = IOBuffer()
+        # A non-returning eval holds the worker; --timeout frees the caller without
+        # waiting for a response.
+        elapsed = @elapsed code =
+            REPLicant.cli(["--port=$port", "--timeout=0.5", "-e", "sleep(3)"]; out, err)
+        @test code == 1
+        @test elapsed < 2
+        @test isempty(String(take!(out)))
+        # The error names the timeout and points at kill as the recovery.
+        message = String(take!(err))
+        @test contains(message, "kill")
+        # The server is still alive: pings are answered off the wedged worker.
+        @test REPLicant._ping(port)
+    end
+end
+
+@testitem "status_formatting" tags = [:cli] begin
+    import REPLicant
+    import Dates
+
+    # An empty pong body is an idle server.
+    @test REPLicant._format_status("") == "idle"
+
+    # A timestamp marks a busy server, rendered with elapsed seconds.
+    marker = string(Dates.now() - Dates.Second(5))
+    rendered = REPLicant._format_status(marker)
+    @test contains(rendered, "busy")
+    @test contains(rendered, "s")
+
+    # A garbled marker still reads as busy rather than crashing.
+    @test contains(REPLicant._format_status("not-a-date"), "busy")
+end
+
+@testitem "ls_reports_busy_state" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        # An idle server: empty pong body, STATUS column shows idle.
+        @test REPLicant._ping_status(port) == ""
+        out = IOBuffer()
+        @test REPLicant.cli(["ls"]; out) == 0
+        listing = String(take!(out))
+        @test contains(listing, "STATUS")
+        @test contains(listing, "idle")
+
+        # Occupy the worker; the pong now carries a busy-since marker and ls
+        # renders the server busy.
+        busy = @async Utilities.request(port, "sleep(2)")
+        sleep(0.5)
+        @test !isempty(REPLicant._ping_status(port))
+        @test REPLicant.cli(["ls"]; out) == 0
+        @test contains(String(take!(out)), "busy")
+        wait(busy)
+    end
 end
 
 @testitem "client_send_and_ls" tags = [:cli] setup = [Utilities] begin

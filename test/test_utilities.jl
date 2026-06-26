@@ -89,6 +89,47 @@
         end
     end
 
+    # Launch a REPLicant server in a separate Julia process registered in
+    # `registry`, rooted at `work`. Waits for its registry entry, then runs
+    # `func(port, pid)` against the live process. The subprocess is killed on exit;
+    # returns the entry path so a test can assert it was cleaned up. Used by kill
+    # tests, which must target a process other than the test runner.
+    function spawn_server(func, registry, work)
+        script = "using REPLicant; s = REPLicant.Server(); take!(s.channel); wait(s.task)"
+        project = pkgdir(REPLicant)
+        env = copy(ENV)
+        env["REPLICANT_DIR"] = registry
+        cmd = setenv(
+            `$(Base.julia_cmd()) --project=$project --startup-file=no -e $script`,
+            env;
+            dir = work,
+        )
+        proc = run(pipeline(cmd; stdout = devnull, stderr = devnull); wait = false)
+        return try
+            entry_path = _wait_for_entry(registry)
+            fields = REPLicant._parse_registry_entry(entry_path)
+            func(parse(Int, fields["port"]), parse(Int, fields["pid"]))
+            entry_path
+        finally
+            process_running(proc) && kill(proc, Base.SIGKILL)
+        end
+    end
+
+    function _wait_for_entry(registry; timeout = 60)
+        deadline = time() + timeout
+        while time() < deadline
+            # Match only the final entry, named by port digits. The atomic write
+            # briefly leaves a `<port>.tmp.<pid>` file; skip it so the reader never
+            # sees a half-written entry.
+            files = filter(readdir(registry)) do f
+                isfile(joinpath(registry, f)) && all(isdigit, f)
+            end
+            isempty(files) || return joinpath(registry, first(files))
+            sleep(0.1)
+        end
+        return error("server did not register within $(timeout)s")
+    end
+
     # Run `func(start, registry)` inside an isolated project and registry, where
     # `start()` launches another server in that same project and returns
     # `(server, port)`. Lets a test stand up several servers in one project to

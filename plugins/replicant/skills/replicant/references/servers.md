@@ -8,10 +8,11 @@ Part of the `replicant` skill; see `SKILL.md`.
 julia +rpc ls
 ```
 
-Lists every live server: `PORT NAME PROJECT JULIA PID STARTED`. A server is rooted
-at the project it started in (git top-level, else the working directory). `julia
-+rpc` from inside that tree selects it. With one server for the project, selection
-is automatic. Disambiguate with:
+Lists every live server: `PORT NAME PROJECT JULIA PID STARTED STATUS`. `STATUS` is
+`idle`, or `busy <n>s` when the server is mid-evaluation (a long compute, or a
+wedge). A server is rooted at the project it started in (git top-level, else the
+working directory). `julia +rpc` from inside that tree selects it. With one server
+for the project, selection is automatic. Disambiguate with:
 
 - `--name <label>`: pick a labeled server (see below).
 - `--port <n>`: target a specific port.
@@ -39,6 +40,21 @@ close(REPLicant.server()) # stop it
 
 Showing the handle reports port, project, name, start time, and limits, read from
 the struct, not the registry.
+
+## Stop a wedged server
+
+A server holding its worker on a non-returning eval (`while true`, a deadlock, a
+blocking read) keeps `ls` showing it `busy` and never evaluates again. Julia
+cannot interrupt a running task, so the recovery is to kill the process:
+
+```bash
+julia +rpc kill            # SIGTERM the resolved server
+julia +rpc kill --force    # SIGKILL, the only signal that lands on a tight loop
+```
+
+`kill` takes the same `--port`/`--name`/`--project` selectors as eval and resolves
+from the registry without pinging, so a server that cannot answer still resolves.
+Killing loses the session state; start a fresh server afterward.
 
 ## Start a server by hand
 

@@ -16,16 +16,15 @@
         # the Julia and JET versions (JET 0.10 on Julia 1.12), so the ratchet runs
         # only there.
         JET_JULIA = v"1.12"
-        # Help mode's `@doc` fallback evaluates and `show`s a docs object of
-        # unknown type, so `_help`/`__help`/`_render_md` contribute intentional
-        # dynamic-dispatch reports over `Any`; the rest are socket IO and logging.
-        # +5 over the prior 308: the output `Router`/`RouterDisplay` write to an
-        # abstract `IO` resolved per task, and `_capture`'s pipe reader,
-        # `flush_cstdio`, and RNG copy/restore add more reports over the pipe's
-        # abstract IO, so JET sees intentional dynamic dispatch on `write`/`show`,
-        # like the socket IO paths.
-        SOUND_LIMIT = 313   # JET.report_package(REPLicant; mode = :sound)
-        OPT_LIMIT = 0       # JET.report_opt on _parse_client_args(::Vector{String})
+        # The count is intentional dynamic dispatch: eval over `Any`, sound-mode
+        # `getfield`/`setfield` on the `cli`/parser NamedTuples and the server's
+        # `busy_since`, and abstract-IO `write`/`show` across the socket paths, the
+        # per-task output `Router`, the `ls` status table, and `_capture`'s pipe
+        # reader. Help mode's `@doc` fallback `show`s a docs object of unknown
+        # type. The `kill` and `--timeout` paths add socket-IO and `println`-over-
+        # `IO` reports in the same category. Threading stays inferrable: opt is 0.
+        SOUND_LIMIT = 316   # JET.report_package(REPLicant; mode = :sound)
+        OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
             sound = JET.get_reports(
@@ -37,7 +36,7 @@
 
             opt = JET.get_reports(
                 JET.report_opt(
-                    Tuple{typeof(REPLicant._parse_client_args), Vector{String}};
+                    Tuple{typeof(REPLicant._parse_args), Vector{String}};
                     target_modules = (REPLicant,),
                 ),
             )

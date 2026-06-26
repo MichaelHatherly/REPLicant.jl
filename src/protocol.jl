@@ -40,23 +40,33 @@ const RESPONSE_PONG = 0x03
 const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING)
 const RESPONSE_TYPES = (RESPONSE_OK, RESPONSE_ERR, RESPONSE_PONG)
 
+# A read that outlived its bound. Carries the bound so callers can phrase their own
+# message; `showerror` keeps the wire-facing text servers reply to clients with.
+struct ReadTimeout <: Exception
+    timeout_seconds::Float64
+end
+Base.showerror(io::IO, err::ReadTimeout) =
+    print(io, "Read timeout: no data received within $(err.timeout_seconds) seconds")
+
 # Run a blocking read on `sock`, closing the socket if it outlives the timeout so
 # the read unblocks with an IOError instead of hanging. The caller closes `sock`
-# again in its own `finally`; the second close is a no-op.
+# again in its own `finally`; the second close is a no-op. A `nothing` timeout
+# blocks with no bound, for callers that must wait as long as the work takes.
 function _read_with_timeout(thunk, sock; timeout_seconds = READ_TIMEOUT_SECONDS)
+    isnothing(timeout_seconds) && return thunk()
     timed_out = Ref(false)
     timer = Timer(timeout_seconds) do _
         timed_out[] = true
         close(sock)
     end
     return try
-        thunk()
+        # Closing the socket may unblock the read by returning short/empty rather
+        # than throwing, so the timeout is detected from the flag, not the throw.
+        result = thunk()
+        timed_out[] && throw(ReadTimeout(timeout_seconds))
+        result
     catch
-        timed_out[] && throw(
-            ErrorException(
-                "Read timeout: no data received within $(timeout_seconds) seconds",
-            ),
-        )
+        timed_out[] && throw(ReadTimeout(timeout_seconds))
         rethrow()
     finally
         close(timer)

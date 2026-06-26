@@ -63,23 +63,46 @@ function _write_registry_entry(
     return path
 end
 
-# Probe a server with a ping frame, expecting a pong. A different-version server
-# fails the version check and reads as dead, which is the intended lockstep
-# behavior. Matches the liveness check the CLI uses for `ls`.
-function _ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
+# Probe a server with a ping frame. Returns the pong body (a busy-since marker,
+# empty when idle) when the server answers, or `nothing` when it does not. A
+# different-version server fails the version check and reads as dead, which is the
+# intended lockstep behavior.
+function _ping_status(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
     try
         sock = Sockets.connect(Sockets.localhost, port)
         try
             _write_frame(sock, REQUEST_PING, "")
             frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
-            return !isnothing(frame) && frame.type == RESPONSE_PONG
+            (isnothing(frame) || frame.type != RESPONSE_PONG) && return nothing
+            return frame.body
         finally
             close(sock)
         end
     catch
-        return false
+        return nothing
     end
 end
+
+# Liveness as a boolean, for prune and resolution. Matches the check `ls` uses.
+_ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS) =
+    !isnothing(_ping_status(port; timeout_seconds))
+
+# Signals for terminating a server process. SIGTERM asks; SIGKILL forces and is
+# the only stop that lands on a worker wedged in a tight, non-yielding loop. libuv
+# maps both, plus the signal-0 existence check, onto Windows, so the kill path is
+# cross-platform.
+const SIGTERM = 15
+const SIGKILL = 9
+
+# Liveness by process existence, independent of whether the server answers its
+# socket. Signal 0 delivers nothing but still checks the target: a wedged server
+# is a live process that cannot pong, so this is how `kill` finds its target.
+_process_alive(pid::Integer) = _signal_process(pid, 0)
+
+# Send `signal` to `pid` through libuv. Returns true when delivered, false when the
+# process is already gone (`uv_kill` reports a negative UV error such as ESRCH).
+_signal_process(pid::Integer, signal::Integer) =
+    ccall(:uv_kill, Cint, (Cint, Cint), pid, signal) == 0
 
 # Drop registry entries for this project whose servers no longer answer a ping.
 # Replaces the old per-project lock: several live servers per project coexist.
