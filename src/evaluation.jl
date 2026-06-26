@@ -164,6 +164,39 @@ function __help(::Any, query::AbstractString, mod::Module)
 end
 
 #
+# Busy indicator.
+#
+
+# Depth of in-flight remote evaluations. A counter, not a flag, so overlapping or
+# nested signals compose; the worker is sequential today, so depth is 0 or 1.
+const REMOTE_EVAL_DEPTH = Threads.Atomic{Int}(0)
+
+# True while at least one remote evaluation is running. Read from the REPL render
+# thread by the prompt; the atomic gives a consistent value.
+_is_busy() = REMOTE_EVAL_DEPTH[] > 0
+
+# Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
+# `__notify_busy(::Nothing)` to recolor the prompt and set the terminal title.
+# Without REPL the `::Any` fallback does nothing.
+function _notify_busy(delta::Int)
+    Threads.atomic_add!(REMOTE_EVAL_DEPTH, delta)
+    __notify_busy(nothing)
+    return nothing
+end
+__notify_busy(::Any) = nothing
+
+# Evaluate a remote request while signaling the prompt that work is in flight.
+# Pings never reach here, so the indicator reflects only real evaluations.
+function _evaluate_request(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
+    _notify_busy(1)
+    return try
+        _evaluate(code, id, mod)
+    finally
+        _notify_busy(-1)
+    end
+end
+
+#
 # Revise integration.
 #
 

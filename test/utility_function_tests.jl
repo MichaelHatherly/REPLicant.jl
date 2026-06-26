@@ -39,6 +39,31 @@ end
     end
 end
 
+@testitem "busy_depth_counter" tags = [:utilities] begin
+    # Busy state is a depth counter: nested signals stack, and only the matching
+    # number of decrements clears it. Restored to idle at the end.
+    @test !REPLicant._is_busy()
+    REPLicant._notify_busy(1)
+    @test REPLicant._is_busy()
+    REPLicant._notify_busy(1)
+    @test REPLicant._is_busy()
+    REPLicant._notify_busy(-1)
+    @test REPLicant._is_busy()
+    REPLicant._notify_busy(-1)
+    @test !REPLicant._is_busy()
+end
+
+@testitem "busy_hook_safe_without_repl" tags = [:utilities] begin
+    import REPL  # loads the REPL extension, which overrides __notify_busy
+    # The server starts before any interactive REPL exists, so the hook must be a
+    # safe no-op when `Base.active_repl` is unset while the counter still tracks.
+    @test !REPLicant._is_busy()
+    REPLicant._notify_busy(1)
+    @test REPLicant._is_busy()
+    REPLicant._notify_busy(-1)
+    @test !REPLicant._is_busy()
+end
+
 @testitem "revise_dispatch" tags = [:utilities] begin
     # Test the revise dispatch mechanism
     # Without Revise loaded, should just call function directly

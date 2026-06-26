@@ -140,7 +140,7 @@ function _handle_client(sock::IO, id::Integer, mod::Union{Module, Nothing}, read
 
         verbose && @info "Received code" id code = Text(frame.body)
 
-        result = _evaluate(frame.body, id, mod)
+        result = _evaluate_request(frame.body, id, mod)
         _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
 
         verbose && @info "Sent result" id result = Text(result.output)
