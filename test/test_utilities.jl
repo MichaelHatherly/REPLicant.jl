@@ -118,7 +118,12 @@
     function _wait_for_entry(registry; timeout = 60)
         deadline = time() + timeout
         while time() < deadline
-            files = filter(f -> isfile(joinpath(registry, f)), readdir(registry))
+            # Match only the final entry, named by port digits. The atomic write
+            # briefly leaves a `<port>.tmp.<pid>` file; skip it so the reader never
+            # sees a half-written entry.
+            files = filter(readdir(registry)) do f
+                isfile(joinpath(registry, f)) && all(isdigit, f)
+            end
             isempty(files) || return joinpath(registry, first(files))
             sleep(0.1)
         end
