@@ -30,6 +30,20 @@ avoids the question.
 Output is REPL-style: captured stdout and stderr first, then the value, or a
 scrubbed error with backtrace.
 
+## Help mode
+
+A leading `?` returns documentation, like the REPL's help mode. Use `?name` for
+brief help, `??name` for extended:
+
+```bash
+julia +rpc -e '?println'
+julia +rpc -e '?+'
+```
+
+With REPL loaded (the interactive server, the default) this is the full help mode:
+operators, keywords, macros, and `?"text"` apropos search. A headless server falls
+back to `@doc`, covering bindings, operators, and macros.
+
 ## Session state
 
 The server evaluates into a persistent `Main`, so bindings survive across calls:
