@@ -13,7 +13,7 @@
         # Third connection should be rejected at capacity. The server drains the
         # framed request before replying, so the rejection arrives as a reply.
         response3 = Utilities.request(port, "3")
-        @test startswith(response3, "ERROR: Server at capacity")
+        @test startswith(response3, "Server at capacity")
 
         # Drain the held connections to free slots.
         @test strip(Utilities.readresp(sock1)) == "1"
@@ -40,7 +40,7 @@ end
             @async begin
                 try
                     response = Utilities.request(port, "\"test_$i\"")
-                    if startswith(response, "ERROR: Server at capacity")
+                    if startswith(response, "Server at capacity")
                         Threads.atomic_add!(rejected_count, 1)
                     else
                         Threads.atomic_add!(success_count, 1)

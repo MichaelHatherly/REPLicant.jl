@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Gate CI on a Dendro code-quality scan of the package source: a separate Julia 1.12 job fails the build on high-complexity bands or duplicate, stub, and swallowed-error flags [#28]
 
+### Changed
+
+- Replace the length-prefixed wire protocol with a versioned binary frame protocol: a fixed header (magic, version, type code, body length) is validated on every message, and evaluation errors return a distinct frame type so the client routes them to stderr and exits non-zero [#32]
+
 ## [v2.0.0] - 2026-06-19
 
 ### Added
@@ -58,3 +62,4 @@ Initial Public Release
 [#19]: https://github.com/MichaelHatherly/REPLicant.jl/issues/19
 [#21]: https://github.com/MichaelHatherly/REPLicant.jl/issues/21
 [#28]: https://github.com/MichaelHatherly/REPLicant.jl/issues/28
+[#32]: https://github.com/MichaelHatherly/REPLicant.jl/issues/32

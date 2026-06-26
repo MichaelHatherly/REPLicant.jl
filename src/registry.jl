@@ -63,16 +63,16 @@ function _write_registry_entry(
     return path
 end
 
-# Probe a server by sending a zero-length request (the health no-op). Matches
-# the cross-platform liveness check the CLI uses for `ls`.
+# Probe a server with a ping frame, expecting a pong. A different-version server
+# fails the version check and reads as dead, which is the intended lockstep
+# behavior. Matches the liveness check the CLI uses for `ls`.
 function _ping(port::Integer)
     try
         sock = Sockets.connect(Sockets.localhost, port)
         try
-            write(sock, "0\n")
-            flush(sock)
-            read(sock)
-            return true
+            _write_frame(sock, REQUEST_PING, "")
+            frame = _read_frame(sock, RESPONSE_TYPES)
+            return !isnothing(frame) && frame.type == RESPONSE_PONG
         finally
             close(sock)
         end

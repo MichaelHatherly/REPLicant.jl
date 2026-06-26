@@ -59,6 +59,20 @@ end
     end
 end
 
+@testitem "client_eval_error_routes_to_stderr" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        err = IOBuffer()
+        # An evaluation error exits non-zero, with the error on stderr and nothing
+        # on stdout.
+        @test REPLicant.cli(["--port=$port", "-e", "undefined_variable"]; out, err) == 1
+        @test isempty(String(take!(out)))
+        @test contains(String(take!(err)), "UndefVarError")
+    end
+end
+
 @testitem "client_selection_cascade" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

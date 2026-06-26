@@ -1,7 +1,8 @@
 @testitem "eval_simple_arithmetic" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._eval_code("2 + 2", 1, mod)
-    @test strip(result) == "4"
+    result = REPLicant._evaluate("2 + 2", 1, mod)
+    @test !result.errored
+    @test strip(result.output) == "4"
 end
 
 @testitem "eval_with_output" tags = [:code_evaluation] begin
@@ -10,8 +11,8 @@ end
     println("Hello")
     42
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    lines = split(strip(result), '\n')
+    result = REPLicant._evaluate(code, 1, mod)
+    lines = split(strip(result.output), '\n')
     @test length(lines) == 2
     @test lines[1] == "Hello"
     @test lines[2] == "42"
@@ -24,8 +25,8 @@ end
     y = 20
     x + y
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test strip(result) == "30"
+    result = REPLicant._evaluate(code, 1, mod)
+    @test strip(result.output) == "30"
 end
 
 @testitem "eval_function_definition" tags = [:code_evaluation] begin
@@ -36,8 +37,8 @@ end
     end
     greet("World")
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test strip(result) == "\"Hello, World!\""
+    result = REPLicant._evaluate(code, 1, mod)
+    @test strip(result.output) == "\"Hello, World!\""
 end
 
 @testitem "eval_using_packages" tags = [:code_evaluation] begin
@@ -47,40 +48,41 @@ end
     using Statistics
     mean([1, 2, 3, 4, 5])
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test strip(result) == "3.0"
+    result = REPLicant._evaluate(code, 1, mod)
+    @test strip(result.output) == "3.0"
 end
 
 @testitem "eval_empty_code" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._eval_code("", 1, mod)
-    @test strip(result) == "nothing"
+    result = REPLicant._evaluate("", 1, mod)
+    @test !result.errored
+    @test strip(result.output) == "nothing"
 end
 
 @testitem "eval_nothing_result" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._eval_code("nothing", 1, mod)
-    @test strip(result) == "nothing"
+    result = REPLicant._evaluate("nothing", 1, mod)
+    @test strip(result.output) == "nothing"
 end
 
 @testitem "eval_array_display" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._eval_code("[1, 2, 3]", 1, mod)
-    @test contains(result, "3-element Vector{Int64}")
-    @test contains(result, "1")
-    @test contains(result, "2")
-    @test contains(result, "3")
+    result = REPLicant._evaluate("[1, 2, 3]", 1, mod)
+    @test contains(result.output, "3-element Vector{Int64}")
+    @test contains(result.output, "1")
+    @test contains(result.output, "2")
+    @test contains(result.output, "3")
 end
 
 @testitem "eval_dict_display" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._eval_code("Dict(:a => 1, :b => 2)", 1, mod)
-    @test contains(result, "Dict{Symbol, Int64}")
-    @test contains(result, ":a => 1") || contains(result, ":b => 2")
+    result = REPLicant._evaluate("Dict(:a => 1, :b => 2)", 1, mod)
+    @test contains(result.output, "Dict{Symbol, Int64}")
+    @test contains(result.output, ":a => 1") || contains(result.output, ":b => 2")
 end
 
 @testitem "eval_string_with_quotes" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._eval_code("\"Hello \\\"World\\\"\"", 1, mod)
-    @test strip(result) == "\"Hello \\\"World\\\"\""
+    result = REPLicant._evaluate("\"Hello \\\"World\\\"\"", 1, mod)
+    @test strip(result.output) == "\"Hello \\\"World\\\"\""
 end

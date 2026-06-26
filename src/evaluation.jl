@@ -49,7 +49,10 @@ end
 # Code evaluation.
 #
 
-function _eval_code(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
+# Evaluate `code` and format the result REPL-style, returning the rendered text
+# and whether evaluation (or formatting) errored. The `errored` flag drives the
+# response frame's type so the client can route failures and set its exit code.
+function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
     # Use the active module to maintain state between evaluations.
     # This allows users to define variables and use them in subsequent calls.
     mod = @something(mod, Base.active_module())
@@ -72,13 +75,13 @@ function _eval_code(code::AbstractString, id::Integer, mod::Union{Module, Nothin
             _echo_object(result.value) && _show_object(buffer, result, mod)
         end
 
-        return String(take!(buffer))
+        return (; output = String(take!(buffer)), errored = result.error)
     catch error
         # Guards failures in the result-formatting path (`_error_message`,
         # `_show_object`, `take!`). Evaluation errors are caught inside `_capture`
         # and reported through `result.error`.
         @error "Error evaluating code" id code error
-        return "ERROR: $(error)"
+        return (; output = "ERROR: $(error)", errored = true)
     end
 end
 

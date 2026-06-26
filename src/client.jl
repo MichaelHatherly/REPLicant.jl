@@ -159,18 +159,23 @@ function _parse_port(value::AbstractString)
     return port
 end
 
-# Frame a request (byte-count line, then the bytes) and stream the response to `out`.
-function _send(port::Integer, code::AbstractString; out::IO = stdout)
+# Send an eval frame and route the response: `ok` to `out`, `err` to `err`.
+# Returns a process exit code, non-zero when the evaluation errored.
+function _send(port::Integer, code::AbstractString; out::IO = stdout, err::IO = stderr)
     sock = Sockets.connect(Sockets.localhost, port)
     try
-        write(sock, "$(ncodeunits(code))\n")
-        write(sock, code)
-        flush(sock)
-        write(out, read(sock))
+        _write_frame(sock, REQUEST_EVAL, code)
+        frame = _read_frame(sock, RESPONSE_TYPES)
+        isnothing(frame) && error("server closed the connection without a response")
+        if frame.type == RESPONSE_ERR
+            write(err, frame.body)
+            return 1
+        end
+        write(out, frame.body)
+        return 0
     finally
         close(sock)
     end
-    return nothing
 end
 
 function _list_servers(out::IO = stdout)
@@ -223,8 +228,7 @@ function cli(args = ARGS; out::IO = stdout, err::IO = stderr)
         parsed = _parse_client_args(args)
         code = isnothing(parsed.code) ? read(stdin, String) : parsed.code
         target = _resolve_port(parsed.port, parsed.project, parsed.name)
-        _send(target, code; out)
-        return 0
+        return _send(target, code; out, err)
     catch error
         error isa InterruptException && rethrow()
         message = error isa ErrorException ? error.msg : sprint(showerror, error)
