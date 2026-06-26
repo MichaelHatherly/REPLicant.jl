@@ -1,48 +1,146 @@
 #
 # Output capture.
 #
+# Output is routed per task rather than redirected process-wide. A remote eval
+# binds `CAPTURE_TARGET` to its own pipe for the eval's dynamic extent; the
+# routing IO and display steer Julia-level writes to that pipe when bound and
+# to the real streams otherwise. The eval also redirects the raw fds 1/2 to the
+# same pipe, so subprocess and C-library output is captured too. The interactive
+# REPL's output, running with no binding, reaches the terminal even while an eval
+# is in flight.
 
-# Run `f` with stdout, stderr, and logging redirected to a pipe, returning the
-# captured text alongside the value (or the thrown exception and its backtrace).
-# InterruptException is rethrown so long-running code stays interruptible.
+# The process's real streams, captured when routing is installed. These TTYs write
+# to the terminal through their own libuv handles, independent of fd 1/2. Idle,
+# their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its pipe and
+# restores these afterward. The routers steer Julia-level writes to them when no
+# capture target is bound.
+const REAL_OUT = Ref{IO}()
+const REAL_ERR = Ref{IO}()
+
+# The current eval's capture target, or `nothing` when no eval is active. Bound by
+# `with(CAPTURE_TARGET => pipe.in)` and, on 1.11+, inherited by child tasks the
+# eval spawns. `_capture` binds the pipe's write end, a `LibuvStream` whose `write`
+# locks internally, so concurrent writes from inherited tasks stay safe.
+const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
+
+# Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
+# real stream from `real` (`REAL_OUT` for stdout, `REAL_ERR` for stderr).
+# `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged;
+# `write`/`unsafe_write` steer to the bound capture target, else the real stream.
+# Property queries (`:color`, `displaysize`) delegate to the active stream so the
+# router impersonates it: the idle REPL sees the real TTY (color on, real size),
+# captured output sees the plain buffer (color off). `redirect_stdout` reads
+# `get(stdout, :color)` when building the REPL, so this keeps the prompt colored.
+struct Router <: Base.AbstractPipe
+    real::Base.RefValue{IO}
+end
+_routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
+Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
+Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
+Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt) = unsafe_write(_routed(r), p, n)
+Base.write(r::Router, b::UInt8) = write(_routed(r), b)
+Base.flush(r::Router) = flush(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
+Base.get(r::Router, key::Symbol, default) = get(_routed(r), key, default)
+Base.displaysize(r::Router) = displaysize(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
+
+# Routes `display(x)` to the bound capture target. With none bound it declines via
+# a `MethodError`, so the global display stack falls through to the next display
+# (the REPL's, which reaches the terminal). Mirrors `Base.Multimedia.TextDisplay`.
+struct RouterDisplay <: Base.AbstractDisplay end
+
+function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
+    target = CAPTURE_TARGET[]
+    target === nothing && throw(MethodError(display, (d, M, x)))
+    return show(target, M, x)
+end
+Base.display(d::RouterDisplay, x) = display(d, MIME"text/plain"(), x)
+
+# Install the routing streams and display once. Idempotent so several servers in
+# one process share a single installation. Headless servers route too; with no
+# capture target bound, every write reaches the real streams.
+const ROUTING_INSTALLED = Ref(false)
+
+function _install_routing!()
+    ROUTING_INSTALLED[] && return nothing
+    REAL_OUT[] = stdout
+    REAL_ERR[] = stderr
+    redirect_stdout(Router(REAL_OUT))
+    redirect_stderr(Router(REAL_ERR))
+    pushdisplay(RouterDisplay())
+    ROUTING_INSTALLED[] = true
+    return nothing
+end
+
+function _uninstall_routing!()
+    ROUTING_INSTALLED[] || return nothing
+    redirect_stdout(REAL_OUT[])
+    redirect_stderr(REAL_ERR[])
+    popdisplay()
+    ROUTING_INSTALLED[] = false
+    return nothing
+end
+
+# `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
+# wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
+# to the stream underneath. The routers still write to the full `IOContext`, so
+# `:color` and the rest carry through; only the fd redirect needs the bare stream.
+_fd_stream(io::IO) = io
+_fd_stream(io::Base.IOContext) = _fd_stream(io.io)
+
+# Run `f` with its output captured, returning the captured text alongside the
+# value (or the thrown exception and its backtrace). InterruptException is rethrown
+# so long-running code stays interruptible.
+#
+# A single pipe sinks every strand of the eval's output in write order: the
+# routers and the display steer Julia-level writes there via `CAPTURE_TARGET`, the
+# logger writes its records there, and fd 1/2 are redirected to it so subprocess
+# and C-library output land there too. fd 1 is process-global, so a subprocess
+# launched at the REPL prompt during an eval is captured into that eval; the worker
+# is sequential, so this is rare and accepted.
 function _capture(f)
-    default_stdout = stdout
-    default_stderr = stderr
+    # Capture routes through the installed streams. The server installs them at
+    # start; install here too so a direct `_capture` (e.g. a test) still routes.
+    _install_routing!()
 
     pipe = Pipe()
     Base.link_pipe!(pipe; reader_supports_async = true, writer_supports_async = true)
-    redirect_stdout(pipe.in)
-    redirect_stderr(pipe.in)
-    # `display(x)` writes through the display stack, not the redirected stdout, so
-    # push a text display onto the pipe to capture it too.
-    pushdisplay(Base.Multimedia.TextDisplay(pipe.in))
+    # Redirect only the raw fds, not the global `stdout`/`stderr` bindings: those
+    # stay the routers. `_redirect_io_libc` is the primitive `redirect_stdout`
+    # calls; it dups the fd portably (Windows `SetStdHandle` handled internally).
+    Base._redirect_io_libc(pipe.in, 1)
+    Base._redirect_io_libc(pipe.in, 2)
     logger = Logging.ConsoleLogger(pipe.in)
 
     # Spawning the reader task draws from the task RNG; copy and restore it so
     # user code sees an unperturbed random stream.
     old_rng = copy(Random.default_rng())
-    capture_buffer = IOBuffer()
-    reader = @async write(capture_buffer, pipe)
+    buffer = IOBuffer()
+    reader = @async write(buffer, pipe)
     copy!(Random.default_rng(), old_rng)
 
-    value, errored, backtrace = Logging.with_logger(logger) do
-        try
-            yield()
-            f(), false, Vector{Ptr{Cvoid}}()
-        catch err
-            err isa InterruptException && rethrow()
-            err, true, catch_backtrace()
-        finally
-            redirect_stdout(default_stdout)
-            redirect_stderr(default_stderr)
-            popdisplay()
-            close(pipe.in)
-            wait(reader)
+    value, errored, backtrace = with(CAPTURE_TARGET => pipe.in) do
+        Logging.with_logger(logger) do
+            try
+                yield()  # let the reader task start draining the pipe
+                f(), false, Vector{Ptr{Cvoid}}()
+            catch err
+                err isa InterruptException && rethrow()
+                err, true, catch_backtrace()
+            finally
+                # Drain libc's own stdio buffers into the pipe before restoring
+                # the fds, so fully-buffered C output (e.g. `puts`) is captured
+                # rather than flushed to the terminal at process exit.
+                Base.Libc.flush_cstdio()
+                Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
+                Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
+                close(pipe.in)
+                wait(reader)
+            end
         end
     end
 
     return (
-        output = String(take!(capture_buffer)),
+        output = String(take!(buffer)),
         value = value,
         error = errored,
         backtrace = backtrace,

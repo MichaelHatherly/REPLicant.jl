@@ -19,7 +19,12 @@
         # Help mode's `@doc` fallback evaluates and `show`s a docs object of
         # unknown type, so `_help`/`__help`/`_render_md` contribute intentional
         # dynamic-dispatch reports over `Any`; the rest are socket IO and logging.
-        SOUND_LIMIT = 308   # JET.report_package(REPLicant; mode = :sound)
+        # +5 over the prior 308: the output `Router`/`RouterDisplay` write to an
+        # abstract `IO` resolved per task, and `_capture`'s pipe reader,
+        # `flush_cstdio`, and RNG copy/restore add more reports over the pipe's
+        # abstract IO, so JET sees intentional dynamic dispatch on `write`/`show`,
+        # like the socket IO paths.
+        SOUND_LIMIT = 313   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_client_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

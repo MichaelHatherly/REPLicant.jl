@@ -103,3 +103,28 @@ end
     @test contains(result.output, "3-element Vector{Int64}")
     @test contains(result.output, "after")
 end
+
+@testitem "eval_subprocess_output_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    # `run(cmd)` inherits raw fd 1, bypassing the Julia `stdout` object. fd-level
+    # capture must still funnel its output into the result.
+    result = REPLicant._evaluate("run(`echo hello`)", 1, mod)
+    @test contains(result.output, "hello")
+end
+
+@testitem "eval_c_library_output_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    # A C library writing to fd 1 directly (here `puts`) bypasses Julia's streams;
+    # fd-level capture catches it.
+    result = REPLicant._evaluate("ccall(:puts, Cint, (Cstring,), \"viac\")", 1, mod)
+    @test contains(result.output, "viac")
+end
+
+@testitem "eval_subprocess_interleaves_with_println" tags = [:code_evaluation] begin
+    mod = Module()
+    # Julia-level writes and raw-fd subprocess writes share one pipe, so they land
+    # in write order.
+    result = REPLicant._evaluate("println(\"a\"); run(`echo b`); println(\"c\")", 1, mod)
+    lines = split(strip(result.output), '\n')
+    @test lines == ["a", "b", "c"]
+end

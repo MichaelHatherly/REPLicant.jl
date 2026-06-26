@@ -9,12 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Capture subprocess and C-library output in rpc evals: a remote eval redirects fd 1/2 to its own pipe for its duration, so `run(cmd)` and C code writing directly to the file descriptors are returned to the client instead of leaking to the server's terminal [#36]
 - Show remote evaluation in the interactive server's REPL: while a `julia +rpc` request runs, the `julia>` prompt turns yellow and the terminal title shows a busy marker, reverting when it completes [#34]
 - Add a help mode: code beginning with `?` returns documentation, like the REPL. With REPL loaded (the interactive server) it is the full `helpmode`, covering operators, keywords, macros, and `?"text"` apropos search; a headless server falls back to `@doc` for bindings, operators, and macros. `??name` gives extended help [#33]
 - Gate CI on a Dendro code-quality scan of the package source: a separate Julia 1.12 job fails the build on high-complexity bands or duplicate, stub, and swallowed-error flags [#28]
 
 ### Changed
 
+- Route evaluation output per task instead of redirecting the process streams: a remote eval captures only its own output while the interactive server's REPL keeps writing to the terminal, so the two no longer steal each other's output [#36]
 - Replace the length-prefixed wire protocol with a versioned binary frame protocol: a fixed header (magic, version, type code, body length) is validated on every message, and evaluation errors return a distinct frame type so the client routes them to stderr and exits non-zero [#32]
 - Terminate client output with a newline so a result no longer runs into the shell prompt [#32]
 
@@ -77,3 +79,4 @@ Initial Public Release
 [#33]: https://github.com/MichaelHatherly/REPLicant.jl/issues/33
 [#34]: https://github.com/MichaelHatherly/REPLicant.jl/issues/34
 [#35]: https://github.com/MichaelHatherly/REPLicant.jl/issues/35
+[#36]: https://github.com/MichaelHatherly/REPLicant.jl/issues/36

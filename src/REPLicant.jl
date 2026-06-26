@@ -27,6 +27,14 @@ import PrecompileTools
 import Random
 import Sockets
 
+# `Base.ScopedValues` exists on 1.11+; vendor the slice the capture path needs on
+# 1.10. Either path defines `ScopedValue`, `with`, and `getindex` in this module.
+@static if isdefined(Base, :ScopedValues)
+    import Base.ScopedValues: ScopedValue, with
+else
+    include("scopedvalues.jl")
+end
+
 include("server.jl")
 include("registry.jl")
 include("project.jl")
