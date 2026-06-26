@@ -60,6 +60,10 @@ function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing
     # Use the active module to maintain state between evaluations.
     # This allows users to define variables and use them in subsequent calls.
     mod = @something(mod, Base.active_module())
+    if _is_help_query(code)
+        query = chop(lstrip(code); head = 1, tail = 0)  # drop one leading `?`
+        return _help(query, mod)
+    end
     try
         thunk = () -> include_string(mod, code, "REPL[$id]")
         # Capture stdout, stderr, logging, and the return value, giving us
@@ -90,6 +94,9 @@ function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing
 end
 
 _echo_object(object) = true
+# The REPL prints nothing for a `nothing` result; match that rather than echoing
+# the literal "nothing". `display`, which returns `nothing`, is the common case.
+_echo_object(::Nothing) = false
 
 function _show_object(buffer, result, mod)
     # Mimic REPL display settings: limit output size, no color codes
@@ -113,6 +120,47 @@ function _error_message(buffer, result, id)
     # invokelatest: a user-defined exception type may have been created during
     # this request, after the worker's world age was fixed.
     return Base.invokelatest(showerror, buffer, result.value.error, bt)
+end
+
+#
+# Help mode.
+#
+
+# A query whose first non-space character is `?` asks for documentation, matching
+# the REPL's help mode. `?x` is brief help, `??x` extended.
+_is_help_query(code::AbstractString) = startswith(lstrip(code), '?')
+
+# Render a docs object (Markdown.MD, or nothing for apropos) to plain text.
+function _render_md(docs, mod::Module)
+    docs === nothing && return ""
+    buffer = IOBuffer()
+    show(IOContext(buffer, :color => false, :module => mod), MIME"text/plain"(), docs)
+    return String(take!(buffer))
+end
+
+# Two-layer dispatch, mirroring `_revise`. The REPL extension overrides
+# `__help(::Nothing, ...)` with the full `helpmode` (operators, keywords, macros,
+# apropos). Without REPL, the `::Any` fallback uses `@doc`, which covers bindings,
+# operators, and macros.
+_help(query::AbstractString, mod::Module) = __help(nothing, query, mod)
+
+function __help(::Any, query::AbstractString, mod::Module)
+    expr = Meta.parse(query; raise = false)
+    docs = try
+        Core.eval(
+            mod,
+            Expr(
+                :macrocall,
+                GlobalRef(Core, Symbol("@doc")),
+                LineNumberNode(@__LINE__, Symbol(@__FILE__)),
+                expr,
+            ),
+        )
+    catch
+        nothing
+    end
+    isnothing(docs) && return (; output = "No documentation found for `$query`.", errored = false)
+    return (; output = _render_md(docs, mod), errored = false)
 end
 
 #

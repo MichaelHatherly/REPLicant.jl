@@ -56,13 +56,21 @@ end
     mod = Module()
     result = REPLicant._evaluate("", 1, mod)
     @test !result.errored
-    @test strip(result.output) == "nothing"
+    @test strip(result.output) == ""
 end
 
 @testitem "eval_nothing_result" tags = [:code_evaluation] begin
     mod = Module()
     result = REPLicant._evaluate("nothing", 1, mod)
-    @test strip(result.output) == "nothing"
+    @test strip(result.output) == ""
+end
+
+@testitem "eval_non_nothing_value_echoes" tags = [:code_evaluation] begin
+    mod = Module()
+    # Only `nothing` is suppressed; other falsy-looking values still echo.
+    @test strip(REPLicant._evaluate("missing", 1, mod).output) == "missing"
+    @test strip(REPLicant._evaluate("0", 1, mod).output) == "0"
+    @test strip(REPLicant._evaluate("\"\"", 1, mod).output) == "\"\""
 end
 
 @testitem "eval_array_display" tags = [:code_evaluation] begin

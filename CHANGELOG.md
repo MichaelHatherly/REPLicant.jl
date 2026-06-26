@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add a help mode: code beginning with `?` returns documentation, like the REPL. With REPL loaded (the interactive server) it is the full `helpmode`, covering operators, keywords, macros, and `?"text"` apropos search; a headless server falls back to `@doc` for bindings, operators, and macros. `??name` gives extended help [#33]
 - Gate CI on a Dendro code-quality scan of the package source: a separate Julia 1.12 job fails the build on high-complexity bands or duplicate, stub, and swallowed-error flags [#28]
 
 ### Changed
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Stop the client from crashing when its output pipe closes early (e.g. piping through `head`): the broken-pipe error is swallowed [#32]
 - Capture `display(x)` output, which previously bypassed the result because it writes through the display stack rather than stdout [#32]
+- Suppress the `nothing` echo: a `nothing` result now prints nothing, matching the REPL, so `display(x)` no longer leaves a trailing `nothing` [#33]
 
 ## [v2.0.0] - 2026-06-19
 
@@ -69,3 +71,4 @@ Initial Public Release
 [#21]: https://github.com/MichaelHatherly/REPLicant.jl/issues/21
 [#28]: https://github.com/MichaelHatherly/REPLicant.jl/issues/28
 [#32]: https://github.com/MichaelHatherly/REPLicant.jl/issues/32
+[#33]: https://github.com/MichaelHatherly/REPLicant.jl/issues/33
