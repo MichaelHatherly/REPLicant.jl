@@ -23,9 +23,12 @@ PrecompileTools.@setup_workload begin
                     while true
                         sock = Sockets.accept(listener)
                         @async try
-                            _read_request(sock)
-                            write(sock, "ok")
-                            flush(sock)
+                            frame = _read_frame(sock, REQUEST_TYPES)
+                            if !isnothing(frame) && frame.type == REQUEST_PING
+                                _write_frame(sock, RESPONSE_PONG, "")
+                            else
+                                _write_frame(sock, RESPONSE_OK, "2")
+                            end
                         catch  # dendro-ignore: empty_catch -- throwaway acceptor, per-connection errors are irrelevant to precompilation
                         finally
                             close(sock)

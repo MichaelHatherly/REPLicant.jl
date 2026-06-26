@@ -13,6 +13,9 @@ function _capture(f)
     Base.link_pipe!(pipe; reader_supports_async = true, writer_supports_async = true)
     redirect_stdout(pipe.in)
     redirect_stderr(pipe.in)
+    # `display(x)` writes through the display stack, not the redirected stdout, so
+    # push a text display onto the pipe to capture it too.
+    pushdisplay(Base.Multimedia.TextDisplay(pipe.in))
     logger = Logging.ConsoleLogger(pipe.in)
 
     # Spawning the reader task draws from the task RNG; copy and restore it so
@@ -32,6 +35,7 @@ function _capture(f)
         finally
             redirect_stdout(default_stdout)
             redirect_stderr(default_stderr)
+            popdisplay()
             close(pipe.in)
             wait(reader)
         end
@@ -49,7 +53,10 @@ end
 # Code evaluation.
 #
 
-function _eval_code(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
+# Evaluate `code` and format the result REPL-style, returning the rendered text
+# and whether evaluation (or formatting) errored. The `errored` flag drives the
+# response frame's type so the client can route failures and set its exit code.
+function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
     # Use the active module to maintain state between evaluations.
     # This allows users to define variables and use them in subsequent calls.
     mod = @something(mod, Base.active_module())
@@ -72,13 +79,13 @@ function _eval_code(code::AbstractString, id::Integer, mod::Union{Module, Nothin
             _echo_object(result.value) && _show_object(buffer, result, mod)
         end
 
-        return String(take!(buffer))
+        return (; output = String(take!(buffer)), errored = result.error)
     catch error
         # Guards failures in the result-formatting path (`_error_message`,
         # `_show_object`, `take!`). Evaluation errors are caught inside `_capture`
         # and reported through `result.error`.
         @error "Error evaluating code" id code error
-        return "ERROR: $(error)"
+        return (; output = "ERROR: $(error)", errored = true)
     end
 end
 

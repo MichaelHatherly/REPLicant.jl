@@ -4,25 +4,39 @@
     import Sockets
     import Test
 
-    # Write a length-prefixed request (byte-count line, then code bytes) without
-    # waiting for the response. Used to hold a connection slot open.
+    # Send an eval frame without waiting for the response. Used to hold a
+    # connection slot open.
     function sendframe(sock, code)
-        bytes = Vector{UInt8}(codeunits(code))
-        write(sock, "$(length(bytes))\n")
-        write(sock, bytes)
-        flush(sock)
+        REPLicant._write_frame(sock, REPLicant.REQUEST_EVAL, code)
         return sock
     end
 
-    # Read a full response (until the server closes the connection).
-    readresp(sock) = String(read(sock))
+    # Read one response frame: `(; type, body)`, or `nothing` on a bare disconnect.
+    readframe(sock) = REPLicant._read_frame(sock, REPLicant.RESPONSE_TYPES)
 
-    # Frame a request the way the CLI does and return the full response.
+    # The body of the response (empty when the peer sent nothing).
+    function readresp(sock)
+        frame = readframe(sock)
+        return isnothing(frame) ? "" : frame.body
+    end
+
+    # Frame an eval request the way the CLI does and return the response body.
     function request(port, code)
         sock = Sockets.connect(Sockets.localhost, port)
         try
             sendframe(sock, code)
             return readresp(sock)
+        finally
+            close(sock)
+        end
+    end
+
+    # Send an arbitrary typed frame and return the full response frame.
+    function requestframe(port, type, body)
+        sock = Sockets.connect(Sockets.localhost, port)
+        try
+            REPLicant._write_frame(sock, type, body)
+            return readframe(sock)
         finally
             close(sock)
         end

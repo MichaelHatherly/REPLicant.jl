@@ -1,41 +1,47 @@
 @testitem "syntax_error_handling" tags = [:error_handling] begin
     mod = Module()
-    result = REPLicant._eval_code("2 + ", 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "ParseError")
+    result = REPLicant._evaluate("2 + ", 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "ParseError")
 end
 
 @testitem "undefined_variable_error" tags = [:error_handling] begin
     mod = Module()
-    result = REPLicant._eval_code("undefined_var", 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "UndefVarError")
-    @test contains(result, "undefined_var")
+    result = REPLicant._evaluate("undefined_var", 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "UndefVarError")
+    @test contains(result.output, "undefined_var")
 end
 
 @testitem "method_error_handling" tags = [:error_handling] begin
     mod = Module()
-    result = REPLicant._eval_code("\"hello\" + 5", 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "MethodError")
+    result = REPLicant._evaluate("\"hello\" + 5", 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "MethodError")
 end
 
 @testitem "division_by_zero_error" tags = [:error_handling] begin
     mod = Module()
-    result = REPLicant._eval_code("1/0", 1, mod)
-    @test strip(result) == "Inf"  # Julia returns Inf for float division by zero
+    result = REPLicant._evaluate("1/0", 1, mod)
+    @test !result.errored
+    @test strip(result.output) == "Inf"  # Julia returns Inf for float division by zero
 
     # Integer division by zero throws
-    result = REPLicant._eval_code("1÷0", 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "DivideError")
+    result = REPLicant._evaluate("1÷0", 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "DivideError")
 end
 
 @testitem "bounds_error_handling" tags = [:error_handling] begin
     mod = Module()
-    result = REPLicant._eval_code("[1,2,3][5]", 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "BoundsError")
+    result = REPLicant._evaluate("[1,2,3][5]", 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "BoundsError")
 end
 
 @testitem "type_error_handling" tags = [:error_handling] begin
@@ -43,9 +49,10 @@ end
     code = """
     x::Int = "not an int"
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "MethodError") || contains(result, "TypeError")
+    result = REPLicant._evaluate(code, 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "MethodError") || contains(result.output, "TypeError")
 end
 
 @testitem "stack_overflow_handling" tags = [:error_handling] begin
@@ -54,8 +61,9 @@ end
     f() = f()
     f()
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test contains(result, "StackOverflowError")
+    result = REPLicant._evaluate(code, 1, mod)
+    @test result.errored
+    @test contains(result.output, "StackOverflowError")
 end
 
 @testitem "interrupt_is_rethrown_from_capture" tags = [:error_handling] begin
@@ -73,11 +81,12 @@ end
     end
     foo()
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "Custom error")
+    result = REPLicant._evaluate(code, 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "Custom error")
     # Should have truncated backtrace at top-level scope
-    @test contains(result, "top-level scope")
+    @test contains(result.output, "top-level scope")
 end
 
 @testitem "multiple_errors_in_code" tags = [:error_handling] begin
@@ -87,9 +96,10 @@ end
     x = undefined_var
     y = another_undefined_var
     """
-    result = REPLicant._eval_code(code, 1, mod)
-    @test startswith(result, "ERROR:")
-    @test contains(result, "undefined_var")
+    result = REPLicant._evaluate(code, 1, mod)
+    @test result.errored
+    @test startswith(result.output, "ERROR:")
+    @test contains(result.output, "undefined_var")
     # Should not get to the second error
-    @test !contains(result, "another_undefined_var")
+    @test !contains(result.output, "another_undefined_var")
 end

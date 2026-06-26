@@ -27,9 +27,10 @@ does.
   `julia +rpc` UX for free. The cost is ~150-200ms of client boot per call; that
   trade is deliberate.
 - **Simple over clever.** The registry is a directory of `key=value` files: no
-  lock, no JSON, parseable by any client. The wire protocol is length-prefixed
-  bytes read to EOF, so any socket client works without `nc`. Reach for machinery
-  only when a real requirement forces it.
+  lock, no JSON, parseable by any client. The wire protocol is a versioned binary
+  frame (a fixed header carrying magic, version, type, and body length), validated
+  for compliance on every read, with room for richer payload types over time.
+  Reach for machinery only when a real requirement forces it.
 - **Out of the project's dependencies.** REPLicant lives in the global
   environment like Revise, never a direct dep of the project under work. The
   client runs with no `--project` and resolves `using REPLicant` from there.

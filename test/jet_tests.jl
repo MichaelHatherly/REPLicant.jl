@@ -16,7 +16,10 @@
         # the Julia and JET versions (JET 0.10 on Julia 1.12), so the ratchet runs
         # only there.
         JET_JULIA = v"1.12"
-        SOUND_LIMIT = 312   # JET.report_package(REPLicant; mode = :sound)
+        # Below the pre-frame baseline (312): the framed protocol's frame functions
+        # carry concrete types end to end, which also tightened a few inherited
+        # socket-path instabilities.
+        SOUND_LIMIT = 310   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_client_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

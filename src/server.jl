@@ -19,10 +19,11 @@ evaluates code from clients until closed.
   so interactive sessions stay quiet; errors always log.
 
 # Protocol
-Each request is length-prefixed: an ASCII decimal byte count, a newline, then that
-many UTF-8 bytes of code. The server writes the result and closes the socket; the
-client reads to EOF. A zero-length request is a health no-op that replies empty.
-Requests are capped at 16 MB.
+Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
+byte, then a big-endian `UInt32` body length) followed by the body. Requests are
+`eval` (body is code) or `ping`; responses are `ok`/`err` (body is the result or
+error text) or `pong`. Every frame is validated for magic, version, type, and a
+16 MB length cap before its body is trusted.
 
 # Example
 ```julia
@@ -33,7 +34,7 @@ close(server)
 
 The server runs in its own task. Several can run per project; label one with
 [`label!`](@ref) to select it by name. The registry entry is removed on shutdown.
-At capacity, clients get "ERROR: Server at capacity, please retry".
+At capacity, clients get an `err` frame carrying "Server at capacity, please retry".
 """
 mutable struct Server
     task::Task
