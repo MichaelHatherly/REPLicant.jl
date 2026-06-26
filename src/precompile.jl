@@ -10,7 +10,7 @@ PrecompileTools.@setup_workload begin
     ]
     PrecompileTools.@compile_workload begin
         for sample in arg_samples
-            _parse_client_args(sample)
+            _parse_args(sample)
         end
         # Exercise the registry and socket paths against a throwaway loopback
         # server so the framing, ping, and selection code specialize. Guarded so

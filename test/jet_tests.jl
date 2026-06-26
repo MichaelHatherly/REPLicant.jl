@@ -23,8 +23,8 @@
         # reader. Help mode's `@doc` fallback `show`s a docs object of unknown
         # type. The `kill` and `--timeout` paths add socket-IO and `println`-over-
         # `IO` reports in the same category. Threading stays inferrable: opt is 0.
-        SOUND_LIMIT = 353   # JET.report_package(REPLicant; mode = :sound)
-        OPT_LIMIT = 0       # JET.report_opt on _parse_client_args(::Vector{String})
+        SOUND_LIMIT = 316   # JET.report_package(REPLicant; mode = :sound)
+        OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
             sound = JET.get_reports(
@@ -36,7 +36,7 @@
 
             opt = JET.get_reports(
                 JET.report_opt(
-                    Tuple{typeof(REPLicant._parse_client_args), Vector{String}};
+                    Tuple{typeof(REPLicant._parse_args), Vector{String}};
                     target_modules = (REPLicant,),
                 ),
             )

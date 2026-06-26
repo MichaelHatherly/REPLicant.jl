@@ -141,76 +141,62 @@ function _take_value(args, index, flag)
     return args[index], index
 end
 
-# Match a server selector (`--port`/`--project`/`--name`) at `index`, shared by the
-# eval and kill parsers. Returns the updated selectors, the advanced index, and
-# whether the flag matched, so each parser handles only its own extra flags.
-function _match_selector(args, index, port, project, name)
-    arg = args[index]
-    if startswith(arg, "--port=")
-        port = _parse_port(arg[(length("--port=") + 1):end])
-    elseif arg == "--port"
-        value, index = _take_value(args, index, "--port")
-        port = _parse_port(value)
-    elseif startswith(arg, "--project=")
-        project = arg[(length("--project=") + 1):end]
-    elseif arg == "--project"
-        project, index = _take_value(args, index, "--project")
-    elseif startswith(arg, "--name=")
-        name = arg[(length("--name=") + 1):end]
-    elseif arg == "--name"
-        name, index = _take_value(args, index, "--name")
-    else
-        return port, project, name, index, false
+# Flags that carry a value, as `--flag value` or `--flag=value`. `-e`/`--eval` are
+# aliases for the code to run.
+const VALUED_FLAGS = ("--port", "--project", "--name", "--timeout", "-e", "--eval")
+# Flags that stand alone. `-f` is an alias for `--force`.
+const BARE_FLAGS = ("--force", "-f")
+
+# The valued flag `arg` names, whether written `--flag` or `--flag=value`, else
+# nothing. Centralizes the dual-form match so each flag is handled in one place.
+function _valued_flag(arg)
+    for flag in VALUED_FLAGS
+        (arg == flag || startswith(arg, flag * "=")) && return flag
     end
-    return port, project, name, index, true
+    return nothing
 end
 
-function _parse_client_args(args)
-    port = -1
-    project = ""
-    name = ""
-    code = nothing
-    timeout = nothing
+# Split args into a flag-to-value map and the set of bare flags present, accepting
+# both `--flag value` and `--flag=value`. Unknown arguments error.
+function _tokenize_args(args)
+    values = Dict{String, String}()
+    bare = Set{String}()
     index = 1
     while index <= length(args)
-        port, project, name, index, matched = _match_selector(args, index, port, project, name)
-        if !matched
-            arg = args[index]
-            if startswith(arg, "--timeout=")
-                timeout = _parse_timeout(arg[(length("--timeout=") + 1):end])
-            elseif arg == "--timeout"
-                value, index = _take_value(args, index, "--timeout")
-                timeout = _parse_timeout(value)
-            elseif arg == "-e" || arg == "--eval"
-                code, index = _take_value(args, index, "-e")
+        arg = args[index]
+        flag = _valued_flag(arg)
+        if !isnothing(flag)
+            if arg == flag
+                value, index = _take_value(args, index, flag)
+                values[flag] = value
             else
-                error("unrecognized argument: $arg")
+                values[flag] = arg[(length(flag) + 2):end]
             end
+        elseif arg in BARE_FLAGS
+            push!(bare, arg)
+        else
+            error("unrecognized argument: $arg")
         end
         index += 1
     end
-    return (; port, project, name, code, timeout)
+    return values, bare
 end
 
-function _parse_kill_args(args)
-    port = -1
-    project = ""
-    name = ""
-    force = false
-    index = 1
-    while index <= length(args)
-        port, project, name, index, matched = _match_selector(args, index, port, project, name)
-        if !matched
-            arg = args[index]
-            if arg == "--force" || arg == "-f"
-                force = true
-            else
-                error("unrecognized argument: $arg")
-            end
-        end
-        index += 1
-    end
-    return (; port, project, name, force)
+# Parse the client's arguments into selectors plus the per-mode flags. One parser
+# serves both paths: eval reads `code`/`timeout`, kill reads `force`. A flag for the
+# other mode is harmless: each caller reads only the fields it acts on.
+function _parse_args(args)
+    values, bare = _tokenize_args(args)
+    port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
+    timeout = haskey(values, "--timeout") ? _parse_timeout(values["--timeout"]) : nothing
+    return (;
+        port,
+        project = get(values, "--project", ""),
+        name = get(values, "--name", ""),
+        code = get(values, "-e", get(values, "--eval", nothing)),
+        timeout,
+        force = !isempty(bare),
+    )
 end
 
 function _parse_port(value::AbstractString)
@@ -337,7 +323,7 @@ end
 # server still resolves, sends SIGTERM (SIGKILL with --force), and removes the
 # registry entry, since a SIGKILL skips the server's own cleanup.
 function _kill_server(args; out::IO = stdout)
-    parsed = _parse_kill_args(args)
+    parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name)
     pid = tryparse(Int, entry.pid)
     isnothing(pid) && error("registry entry for port $(entry.port) has no valid pid")
@@ -374,7 +360,7 @@ function cli(args = ARGS; out::IO = stdout, err::IO = stderr)
         if !isempty(args) && args[1] == "kill"
             return _kill_server(args[2:end]; out)
         end
-        parsed = _parse_client_args(args)
+        parsed = _parse_args(args)
         code = isnothing(parsed.code) ? read(stdin, String) : parsed.code
         target = _resolve_port(parsed.port, parsed.project, parsed.name)
         return _send(target, code; out, err, timeout_seconds = parsed.timeout)

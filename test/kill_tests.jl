@@ -1,17 +1,17 @@
 @testitem "kill_args_parsing" tags = [:kill] begin
     import REPLicant
 
-    bare = REPLicant._parse_kill_args(["--port=8000"])
+    bare = REPLicant._parse_args(["--port=8000"])
     @test bare.port == 8000
     @test bare.force == false
 
-    spaced = REPLicant._parse_kill_args(["--name", "n", "--project", "p", "--force"])
+    spaced = REPLicant._parse_args(["--name", "n", "--project", "p", "--force"])
     @test spaced.name == "n"
     @test spaced.project == "p"
     @test spaced.force == true
 
-    @test REPLicant._parse_kill_args(["-f"]).force == true
-    @test_throws Exception REPLicant._parse_kill_args(["--bogus"])
+    @test REPLicant._parse_args(["-f"]).force == true
+    @test_throws Exception REPLicant._parse_args(["--bogus"])
 end
 
 @testitem "process_liveness_and_signal" tags = [:kill] begin

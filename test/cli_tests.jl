@@ -1,42 +1,42 @@
 @testitem "client_arg_parsing" tags = [:cli] begin
     import REPLicant
 
-    basic = REPLicant._parse_client_args(["--port=8000", "-e", "x"])
+    basic = REPLicant._parse_args(["--port=8000", "-e", "x"])
     @test basic.port == 8000
     @test basic.code == "x"
     @test basic.project == ""
     @test basic.name == ""
 
     spaced =
-        REPLicant._parse_client_args(["--port", "8001", "--project", "p", "--name", "n"])
+        REPLicant._parse_args(["--port", "8001", "--project", "p", "--name", "n"])
     @test spaced.port == 8001
     @test spaced.project == "p"
     @test spaced.name == "n"
     @test isnothing(spaced.code)
 
-    joined = REPLicant._parse_client_args(["--project=/tmp/x", "--name=lbl", "--eval", "1"])
+    joined = REPLicant._parse_args(["--project=/tmp/x", "--name=lbl", "--eval", "1"])
     @test joined.project == "/tmp/x"
     @test joined.name == "lbl"
     @test joined.code == "1"
 
-    @test_throws Exception REPLicant._parse_client_args(["--port=abc"])
-    @test_throws Exception REPLicant._parse_client_args(["--port"])
-    @test_throws Exception REPLicant._parse_client_args(["--bogus"])
+    @test_throws Exception REPLicant._parse_args(["--port=abc"])
+    @test_throws Exception REPLicant._parse_args(["--port"])
+    @test_throws Exception REPLicant._parse_args(["--bogus"])
 end
 
 @testitem "client_timeout_parsing" tags = [:cli] begin
     import REPLicant
 
     # No --timeout means no bound: the client waits as long as the eval runs.
-    @test isnothing(REPLicant._parse_client_args(["-e", "1"]).timeout)
+    @test isnothing(REPLicant._parse_args(["-e", "1"]).timeout)
 
-    @test REPLicant._parse_client_args(["--timeout=2.5", "-e", "1"]).timeout == 2.5
-    @test REPLicant._parse_client_args(["--timeout", "3", "-e", "1"]).timeout == 3.0
+    @test REPLicant._parse_args(["--timeout=2.5", "-e", "1"]).timeout == 2.5
+    @test REPLicant._parse_args(["--timeout", "3", "-e", "1"]).timeout == 3.0
 
-    @test_throws Exception REPLicant._parse_client_args(["--timeout=abc"])
-    @test_throws Exception REPLicant._parse_client_args(["--timeout=0"])
-    @test_throws Exception REPLicant._parse_client_args(["--timeout=-1"])
-    @test_throws Exception REPLicant._parse_client_args(["--timeout"])
+    @test_throws Exception REPLicant._parse_args(["--timeout=abc"])
+    @test_throws Exception REPLicant._parse_args(["--timeout=0"])
+    @test_throws Exception REPLicant._parse_args(["--timeout=-1"])
+    @test_throws Exception REPLicant._parse_args(["--timeout"])
 end
 
 @testitem "client_timeout_frees_caller" tags = [:cli] setup = [Utilities] begin
