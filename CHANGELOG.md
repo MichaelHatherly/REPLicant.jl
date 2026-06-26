@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Route evaluation output per task instead of redirecting the process streams: a remote eval captures only its own output while the interactive server's REPL keeps writing to the terminal, so the two no longer steal each other's output [#36]
 - Replace the length-prefixed wire protocol with a versioned binary frame protocol: a fixed header (magic, version, type code, body length) is validated on every message, and evaluation errors return a distinct frame type so the client routes them to stderr and exits non-zero [#32]
 - Terminate client output with a newline so a result no longer runs into the shell prompt [#32]
 
@@ -77,3 +78,4 @@ Initial Public Release
 [#33]: https://github.com/MichaelHatherly/REPLicant.jl/issues/33
 [#34]: https://github.com/MichaelHatherly/REPLicant.jl/issues/34
 [#35]: https://github.com/MichaelHatherly/REPLicant.jl/issues/35
+[#36]: https://github.com/MichaelHatherly/REPLicant.jl/issues/36

@@ -132,6 +132,9 @@ Base.close(server::Server) = schedule(server.task, InterruptException(); error =
 
 function _server(srv::Server)
     server, port_number, entry_path = _listen_and_register!(srv)
+    # Route output per eval so a remote eval's output is captured while the
+    # interactive REPL's still reaches the terminal.
+    _install_routing!()
     # Signal readiness now that the registry entry exists.
     put!(srv.channel, port_number)
     return _serve(server, srv, entry_path)
@@ -214,6 +217,7 @@ end
 # Close the listener, drop this process's handle, and remove the registry entry.
 function _shutdown_server(listener, srv, entry_path)
     close(listener)
+    _uninstall_routing!()
     # Forget this process's server so a later `label!` can't rewrite a
     # removed entry.
     CURRENT_SERVER[] === srv && (CURRENT_SERVER[] = nothing)
