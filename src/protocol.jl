@@ -16,7 +16,16 @@
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
+# Liveness probes are answered off the worker queue, so a live server always
+# replies in milliseconds. A short timeout keeps `ls` and resolution snappy and
+# lets a wedged or version-skewed peer read as dead quickly.
+const PING_TIMEOUT_SECONDS = 2.0
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16MB
+
+# Appended to magic/version mismatch errors. A peer that fails the header checks
+# is usually a client or server on a different REPLicant version, which the
+# `julia +rpc` channel does not catch on its own.
+const VERSION_SKEW_HELP = "The client and server may be running different REPLicant versions. Reinstall the rpc channel: julia -e 'using REPLicant; REPLicant.install_channel(force = true)'"
 
 const PROTOCOL_MAGIC = Vector{UInt8}("REPL")
 const PROTOCOL_VERSION = 0x01
@@ -71,11 +80,11 @@ function _parse_header(header::Vector{UInt8}, valid_types::Tuple{Vararg{UInt8}},
     buffer = IOBuffer(header)
     magic = read(buffer, length(PROTOCOL_MAGIC))
     magic == PROTOCOL_MAGIC ||
-        error("Unknown protocol: expected magic \"REPL\", got $(repr(String(magic)))")
+        error("Unknown protocol: expected magic \"REPL\", got $(repr(String(magic))). $VERSION_SKEW_HELP")
 
     version = read(buffer, UInt8)
     version == PROTOCOL_VERSION ||
-        error("Protocol version mismatch: expected $(PROTOCOL_VERSION), got $version")
+        error("Protocol version mismatch: expected $(PROTOCOL_VERSION), got $version. $VERSION_SKEW_HELP")
 
     type = read(buffer, UInt8)
     any(==(type), valid_types) || error("Unknown message type: $type")
@@ -126,33 +135,29 @@ function _reject_at_capacity(sock::IO, id, read_timeout_seconds)
     end
 end
 
-function _handle_client(sock::IO, id::Integer, mod::Union{Module, Nothing}, read_timeout_seconds, verbose)
+# Log a handler failure and try to tell the client, tolerating a socket the peer
+# has already closed.
+function _reply_error(sock::IO, id::Integer, error)
+    @error "Error handling client" id error
+    try
+        _write_frame(sock, RESPONSE_ERR, sprint(showerror, error))
+    catch error
+        # Client disconnected before we could send the error.
+        @error "Failed to send error frame to client" id error
+    end
+    return nothing
+end
+
+function _handle_eval(sock::IO, id::Integer, code::AbstractString, mod::Union{Module, Nothing}, verbose)
     return try
-        frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds = read_timeout_seconds)
+        verbose && @info "Received code" id code = Text(code)
 
-        # Bare disconnect: nothing to reply to.
-        isnothing(frame) && return
-
-        if frame.type == REQUEST_PING
-            _write_frame(sock, RESPONSE_PONG, "")
-            return
-        end
-
-        verbose && @info "Received code" id code = Text(frame.body)
-
-        result = _evaluate_request(frame.body, id, mod)
+        result = _evaluate_request(code, id, mod)
         _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
 
         verbose && @info "Sent result" id result = Text(result.output)
     catch error
-        @error "Error handling client" id error
-        try
-            # Inform the client about a protocol or framing error.
-            _write_frame(sock, RESPONSE_ERR, sprint(showerror, error))
-        catch error
-            # Client disconnected before we could send the error.
-            @error "Failed to send error frame to client" id error
-        end
+        _reply_error(sock, id, error)
     finally
         # Always close the socket to free resources and signal EOF to the client.
         close(sock)

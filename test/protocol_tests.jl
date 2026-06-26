@@ -49,7 +49,11 @@ end
         e
     end
     @test err isa Exception
-    @test contains(sprint(showerror, err), "protocol")
+    message = sprint(showerror, err)
+    @test contains(message, "protocol")
+    # The most common cause is a peer on a different REPLicant version, so the
+    # error points at reinstalling the channel.
+    @test contains(message, "install_channel")
 end
 
 @testitem "frame_version_mismatch_rejected" tags = [:protocol, :frame] begin
@@ -69,7 +73,9 @@ end
         e
     end
     @test err isa Exception
-    @test contains(sprint(showerror, err), "version")
+    message = sprint(showerror, err)
+    @test contains(message, "version")
+    @test contains(message, "install_channel")
 end
 
 @testitem "frame_unknown_type_rejected" tags = [:protocol, :frame] begin
@@ -199,6 +205,39 @@ end
         @test frame.type == REPLicant.RESPONSE_PONG
         @test !REPLicant._is_busy()
     end
+end
+
+@testitem "ping_answered_during_eval" tags = [:protocol] setup = [Utilities] begin
+    import Sockets
+
+    Utilities.withserver() do server, mod, port
+        # Occupy the worker with a long evaluation.
+        busy = Utilities.sendframe(Sockets.connect(Sockets.localhost, port), "sleep(2); 1")
+        sleep(0.2)  # let the eval reach the worker
+        # The ping must be answered off the worker queue, not behind the 2s eval.
+        elapsed = @elapsed answered = REPLicant._ping(port)
+        @test answered
+        @test elapsed < 1.0
+        @test strip(Utilities.readresp(busy)) == "1"
+        close(busy)
+    end
+end
+
+@testitem "ping_times_out_on_silent_peer" tags = [:protocol, :timeout] begin
+    import REPLicant
+    import Sockets
+
+    # A peer that accepts but never replies must read as dead within the ping
+    # timeout, not the much longer request timeout.
+    listener = Sockets.listen(Sockets.localhost, 0)
+    port = Int(Sockets.getsockname(listener)[2])
+    held = Ref{Any}(nothing)
+    acceptor = @async (held[] = Sockets.accept(listener))
+    elapsed = @elapsed result = REPLicant._ping(port; timeout_seconds = 0.5)
+    @test result == false
+    @test elapsed < 5
+    held[] !== nothing && close(held[])
+    close(listener)
 end
 
 @testitem "noncompliant_frame_rejected" tags = [:protocol] setup = [Utilities] begin

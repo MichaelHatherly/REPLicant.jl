@@ -113,10 +113,13 @@ function Base.show(io::IO, ::MIME"text/plain", srv::Server)
     return
 end
 
-# Request struct to hold client connection information
+# An evaluation handed from the dispatcher to the worker: the connection to reply
+# on, its id, and the code to run. Pings never become a `ClientRequest`; they are
+# answered in the dispatcher.
 struct ClientRequest
     socket::Sockets.TCPSocket
     id::Int
+    code::String
 end
 
 """
@@ -229,11 +232,11 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                 for request in request_queue
                     try
                         _revise(
-                            _handle_client,
+                            _handle_eval,
                             request.socket,
                             request.id,
+                            request.code,
                             srv.mod,
-                            srv.read_timeout_seconds,
                             srv.verbose,
                         )
                     finally
@@ -257,22 +260,63 @@ function _accept_loop(server, request_queue, active_connections, srv::Server)
         # assert it so the socket stays concretely typed through the accept loop.
         sock = Sockets.accept(server)::Sockets.TCPSocket
         id += 1
+        _admit(sock, id, request_queue, active_connections, srv)
+    end
+    return
+end
 
-        # Check if at capacity
-        if active_connections[] >= srv.max_connections
-            srv.verbose && @warn "Connection rejected - server at capacity" id current =
-                active_connections[] max = srv.max_connections
-            # Reject off the accept loop so draining the request never blocks
-            # accepting other connections.
-            @async _reject_at_capacity(sock, id, srv.read_timeout_seconds)
+# Admit one accepted connection: reject at capacity, else count it and dispatch it
+# off the accept loop. A function barrier so the spawned tasks capture stable
+# arguments instead of the loop's reassigned `sock`/`id`, which would box.
+function _admit(
+        sock::Sockets.TCPSocket, id::Int, request_queue::Channel{ClientRequest},
+        active_connections::Threads.Atomic{Int}, srv::Server,
+    )
+    if active_connections[] >= srv.max_connections
+        srv.verbose && @warn "Connection rejected - server at capacity" id current =
+            active_connections[] max = srv.max_connections
+        # Reject off the accept loop so draining the request never blocks accepting.
+        @async _reject_at_capacity(sock, id, srv.read_timeout_seconds)
+    else
+        Threads.atomic_add!(active_connections, 1)
+        srv.verbose &&
+            @info "Client connected" id peer = Sockets.getpeername(sock) active =
+            active_connections[]
+        # Dispatch off the accept loop so reading the frame and answering a ping
+        # never blocks accepting other connections.
+        @async _dispatch(sock, id, request_queue, active_connections, srv)
+    end
+    return
+end
+
+# Per-connection dispatcher. Reads one frame, answers a ping immediately so
+# liveness never queues behind an evaluation, and hands an eval to the worker.
+# Pings, framing errors, and bare disconnects release the connection here; the
+# worker releases an eval connection when it finishes evaluating.
+function _dispatch(
+        sock::Sockets.TCPSocket, id::Int, request_queue::Channel{ClientRequest},
+        active_connections::Threads.Atomic{Int}, srv::Server,
+    )
+    enqueued = false
+    try
+        frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds = srv.read_timeout_seconds)
+        if isnothing(frame)
+            return  # bare disconnect, nothing to reply to
+        elseif frame.type == REQUEST_PING
+            _write_frame(sock, RESPONSE_PONG, "")
+            srv.verbose && @info "Answered ping" id
         else
-            # Accept connection and increment counter
-            Threads.atomic_add!(active_connections, 1)
-            srv.verbose &&
-                @info "Client connected" id peer = Sockets.getpeername(sock) active =
-                active_connections[]
-            request = ClientRequest(sock, id)
-            put!(request_queue, request)
+            put!(request_queue, ClientRequest(sock, id, frame.body))
+            enqueued = true
+        end
+    catch error
+        _reply_error(sock, id, error)
+    finally
+        # The worker owns the connection once enqueued; otherwise release it here.
+        if !enqueued
+            close(sock)
+            Threads.atomic_sub!(active_connections, 1)
+            srv.verbose && @info "Client disconnected" id
         end
     end
     return
