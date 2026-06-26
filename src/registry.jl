@@ -88,7 +88,9 @@ _ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS) =
     !isnothing(_ping_status(port; timeout_seconds))
 
 # Signals for terminating a server process. SIGTERM asks; SIGKILL forces and is
-# the only stop that lands on a worker wedged in a tight, non-yielding loop.
+# the only stop that lands on a worker wedged in a tight, non-yielding loop. libuv
+# maps both, plus the signal-0 existence check, onto Windows, so the kill path is
+# cross-platform.
 const SIGTERM = 15
 const SIGKILL = 9
 
@@ -97,10 +99,10 @@ const SIGKILL = 9
 # is a live process that cannot pong, so this is how `kill` finds its target.
 _process_alive(pid::Integer) = _signal_process(pid, 0)
 
-# Send `signal` to `pid`. Returns true when delivered, false when the process is
-# already gone (the `kill` syscall reports ESRCH).
+# Send `signal` to `pid` through libuv. Returns true when delivered, false when the
+# process is already gone (`uv_kill` reports a negative UV error such as ESRCH).
 _signal_process(pid::Integer, signal::Integer) =
-    ccall(:kill, Cint, (Cint, Cint), pid, signal) == 0
+    ccall(:uv_kill, Cint, (Cint, Cint), pid, signal) == 0
 
 # Drop registry entries for this project whose servers no longer answer a ping.
 # Replaces the old per-project lock: several live servers per project coexist.

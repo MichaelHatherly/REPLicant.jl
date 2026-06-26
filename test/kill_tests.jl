@@ -17,8 +17,9 @@ end
 @testitem "process_liveness_and_signal" tags = [:kill] begin
     import REPLicant
 
-    # A real child process: alive before the signal, gone after.
-    proc = run(`sleep 30`; wait = false)
+    # A real child process: alive before the signal, gone after. A Julia
+    # subprocess sleeps, so the test does not depend on a platform `sleep` binary.
+    proc = run(`$(Base.julia_cmd()) --startup-file=no -e "sleep(30)"`; wait = false)
     pid = Base.process_running(proc) ? getpid(proc) : error("child did not start")
     @test REPLicant._process_alive(pid)
 
