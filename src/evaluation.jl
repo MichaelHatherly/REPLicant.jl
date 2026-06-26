@@ -23,32 +23,25 @@ const REAL_ERR = Ref{IO}()
 # locks internally, so concurrent writes from inherited tasks stay safe.
 const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
-# Routing streams installed via `redirect_stdout`/`redirect_stderr`. `pipe_writer`
-# returns the captured fd-backed stream so the redirect dups its fd unchanged;
+# Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
+# real stream from `real` (`REAL_OUT` for stdout, `REAL_ERR` for stderr).
+# `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged;
 # `write`/`unsafe_write` steer to the bound capture target, else the real stream.
 # Property queries (`:color`, `displaysize`) delegate to the active stream so the
 # router impersonates it: the idle REPL sees the real TTY (color on, real size),
 # captured output sees the plain buffer (color off). `redirect_stdout` reads
 # `get(stdout, :color)` when building the REPL, so this keeps the prompt colored.
-struct RouterOut <: Base.AbstractPipe end
-Base.pipe_writer(::RouterOut) = REAL_OUT[]
-Base.pipe_reader(::RouterOut) = REAL_OUT[]
-_routed_out() = something(CAPTURE_TARGET[], REAL_OUT[])
-Base.unsafe_write(r::RouterOut, p::Ptr{UInt8}, n::UInt) = unsafe_write(_routed_out(), p, n)
-Base.write(r::RouterOut, b::UInt8) = write(_routed_out(), b)
-Base.flush(r::RouterOut) = flush(_routed_out())
-Base.get(r::RouterOut, key::Symbol, default) = get(_routed_out(), key, default)
-Base.displaysize(r::RouterOut) = displaysize(_routed_out())
-
-struct RouterErr <: Base.AbstractPipe end
-Base.pipe_writer(::RouterErr) = REAL_ERR[]
-Base.pipe_reader(::RouterErr) = REAL_ERR[]
-_routed_err() = something(CAPTURE_TARGET[], REAL_ERR[])
-Base.unsafe_write(r::RouterErr, p::Ptr{UInt8}, n::UInt) = unsafe_write(_routed_err(), p, n)
-Base.write(r::RouterErr, b::UInt8) = write(_routed_err(), b)
-Base.flush(r::RouterErr) = flush(_routed_err())
-Base.get(r::RouterErr, key::Symbol, default) = get(_routed_err(), key, default)
-Base.displaysize(r::RouterErr) = displaysize(_routed_err())
+struct Router <: Base.AbstractPipe
+    real::Base.RefValue{IO}
+end
+_routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
+Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
+Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
+Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt) = unsafe_write(_routed(r), p, n)
+Base.write(r::Router, b::UInt8) = write(_routed(r), b)
+Base.flush(r::Router) = flush(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
+Base.get(r::Router, key::Symbol, default) = get(_routed(r), key, default)
+Base.displaysize(r::Router) = displaysize(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
 
 # Routes `display(x)` to the bound capture target. With none bound it declines via
 # a `MethodError`, so the global display stack falls through to the next display
@@ -71,8 +64,8 @@ function _install_routing!()
     ROUTING_INSTALLED[] && return nothing
     REAL_OUT[] = stdout
     REAL_ERR[] = stderr
-    redirect_stdout(RouterOut())
-    redirect_stderr(RouterErr())
+    redirect_stdout(Router(REAL_OUT))
+    redirect_stderr(Router(REAL_ERR))
     pushdisplay(RouterDisplay())
     ROUTING_INSTALLED[] = true
     return nothing
@@ -86,6 +79,13 @@ function _uninstall_routing!()
     ROUTING_INSTALLED[] = false
     return nothing
 end
+
+# `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
+# wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
+# to the stream underneath. The routers still write to the full `IOContext`, so
+# `:color` and the rest carry through; only the fd redirect needs the bare stream.
+_fd_stream(io::IO) = io
+_fd_stream(io::Base.IOContext) = _fd_stream(io.io)
 
 # Run `f` with its output captured, returning the captured text alongside the
 # value (or the thrown exception and its backtrace). InterruptException is rethrown
@@ -131,8 +131,8 @@ function _capture(f)
                 # the fds, so fully-buffered C output (e.g. `puts`) is captured
                 # rather than flushed to the terminal at process exit.
                 Base.Libc.flush_cstdio()
-                Base._redirect_io_libc(REAL_OUT[], 1)
-                Base._redirect_io_libc(REAL_ERR[], 2)
+                Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
+                Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
                 close(pipe.in)
                 wait(reader)
             end
