@@ -19,44 +19,69 @@ function REPLicant.__help(::Nothing, query::AbstractString, mod::Module)
 end
 
 #
-# Busy indicator: recolor the `julia>` prompt and set the terminal title while a
+# Busy indicator: animate the `julia>` prompt and set the terminal title while a
 # remote evaluation is in flight.
 #
 
-const BUSY_COLOR = Base.text_colors[:yellow]
 const INSTALL_LOCK = ReentrantLock()
 const INSTALLED = Ref(false)
 const TERMINAL = Ref{Any}(nothing)
 
-# The interactive `julia>` prompt among the REPL's modes, found by its rendered
-# text rather than position to avoid coupling to mode ordering.
-function _julia_prompt(repl)
-    for mode in repl.interface.modes
-        mode isa LineEdit.Prompt || continue
-        endswith(LineEdit.prompt_string(mode.prompt), "julia> ") && return mode
-    end
+# Animation state. `FRAME` advances one step per timer tick; `ANIM` holds the
+# running timer so a second busy signal does not start a second one. Frame cadence
+# in seconds.
+const FRAME = Ref(0)
+const ANIM = Ref{Union{Timer, Nothing}}(nothing)
+const FRAME_SECONDS = 0.12
+
+# Wrap one prompt mode's text with the busy animation. The closure captures this
+# mode's own original prompt, so idle restores exactly what was there, in its
+# default color. The animated frame keeps the prompt's display width, so swapping
+# it in never shifts typed input.
+function _animate!(prompt)
+    original_prompt = prompt.prompt
+    prompt.prompt =
+        () -> REPLicant._is_busy() ?
+        REPLicant._busy_frame(LineEdit.prompt_string(original_prompt), FRAME[]) :
+        LineEdit.prompt_string(original_prompt)
     return nothing
 end
 
-# Install the busy hooks once. The server starts from startup.jl before the
-# interactive REPL exists, so resolve `active_repl` lazily on first signal.
+# Install the busy hooks once, across every prompt mode (julia, pkg, help, shell).
+# The server starts from startup.jl before the interactive REPL exists, so resolve
+# `active_repl` lazily on first signal.
 function _install!()
     INSTALLED[] && return true
     return lock(INSTALL_LOCK) do
         INSTALLED[] && return true
         (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return false
         repl = Base.active_repl
-        prompt = _julia_prompt(repl)
-        prompt === nothing && return false
-        # The prefix carries no display width, so recoloring never disturbs the
-        # cursor math; idle restores the REPL's configured color.
-        original_prefix = prompt.prompt_prefix
-        prompt.prompt_prefix =
-            () -> REPLicant._is_busy() ? BUSY_COLOR : LineEdit.prompt_string(original_prefix)
+        for mode in repl.interface.modes
+            mode isa LineEdit.Prompt && _animate!(mode)
+        end
         TERMINAL[] = repl.t
         INSTALLED[] = true
         return true
     end
+end
+
+# Repaint the prompt from the REPL render thread. Uses the same async channel the
+# REPL uses for the Pkg-mode switch; absent on Julia 1.10, where the change lands
+# on the next natural render.
+function _request_refresh()
+    repl = Base.active_repl
+    if isdefined(repl, :mistate) && repl.mistate !== nothing && hasproperty(repl.mistate, :async_channel)
+        try
+            put!(
+                repl.mistate.async_channel, function (s)
+                    LineEdit.refresh_line(s)
+                    return :ok
+                end
+            )
+        catch  # dendro-ignore: empty_catch -- async channel closed during REPL shutdown
+        end
+    end
+    return nothing
 end
 
 function REPLicant.__notify_busy(::Nothing)
@@ -71,20 +96,20 @@ function REPLicant.__notify_busy(::Nothing)
         print(terminal, "\e]2;", title, "\a")
     end
 
-    # Repaint the prompt so the recolor shows while the user sits idle. Uses the
-    # same async channel the REPL uses for the Pkg-mode switch; absent on Julia
-    # 1.10, where the recolor lands on the next natural render.
-    repl = Base.active_repl
-    if isdefined(repl, :mistate) && repl.mistate !== nothing && hasproperty(repl.mistate, :async_channel)
-        try
-            put!(
-                repl.mistate.async_channel, function (s)
-                    LineEdit.refresh_line(s)
-                    return :ok
-                end
-            )
-        catch  # dendro-ignore: empty_catch -- async channel closed during REPL shutdown
+    # Drive the animation: start a repeating timer on the first busy signal, stop
+    # it when work clears and repaint once to restore the idle prompt.
+    if busy
+        if ANIM[] === nothing
+            ANIM[] = Timer(FRAME_SECONDS; interval = FRAME_SECONDS) do _
+                FRAME[] += 1
+                _request_refresh()
+            end
         end
+    elseif ANIM[] !== nothing
+        close(ANIM[])
+        ANIM[] = nothing
+        FRAME[] = 0
+        _request_refresh()
     end
 
     return nothing

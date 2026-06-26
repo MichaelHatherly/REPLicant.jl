@@ -64,6 +64,37 @@ end
     @test !REPLicant._is_busy()
 end
 
+@testitem "busy_frame_underscore" tags = [:utilities] begin
+    # The underscore sweep replaces one letter per frame and never changes the
+    # prompt's display width, so typed input never shifts. Only "julia" animates:
+    # the `>` and trailing space stay put.
+    base = "julia> "
+    width = textwidth(base)
+    seen = Int[]
+    for n in 0:12
+        frame = REPLicant._busy_frame(base, n)
+        @test textwidth(frame) == width
+        @test count(==('_'), frame) == 1
+        @test contains(frame, ">")  # the prompt marker is never swept
+        push!(seen, findfirst('_', frame))
+    end
+    @test seen[1:5] == collect(1:5)
+    @test seen[6] == 1  # wraps after the 5 letters of "julia"
+end
+
+@testitem "busy_frame_generic_modes" tags = [:utilities] begin
+    # The animation is generic across REPL modes: it sweeps the label before each
+    # prompt's own marker (last non-blank glyph), never a hardcoded "julia". The
+    # marker stays put and the width holds for every mode.
+    for base in ("pkg> ", "help?> ", "shell> ", "(jl) pkg> ")
+        width = textwidth(base)
+        frame = REPLicant._busy_frame(base, 0)
+        @test textwidth(frame) == width
+        @test count(==('_'), frame) == 1
+        @test endswith(frame, "> ")  # the marker and trailing space survive
+    end
+end
+
 @testitem "revise_dispatch" tags = [:utilities] begin
     # Test the revise dispatch mechanism
     # Without Revise loaded, should just call function directly
