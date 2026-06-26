@@ -81,6 +81,21 @@ function _ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
     end
 end
 
+# Signals for terminating a server process. SIGTERM asks; SIGKILL forces and is
+# the only stop that lands on a worker wedged in a tight, non-yielding loop.
+const SIGTERM = 15
+const SIGKILL = 9
+
+# Liveness by process existence, independent of whether the server answers its
+# socket. Signal 0 delivers nothing but still checks the target: a wedged server
+# is a live process that cannot pong, so this is how `kill` finds its target.
+_process_alive(pid::Integer) = _signal_process(pid, 0)
+
+# Send `signal` to `pid`. Returns true when delivered, false when the process is
+# already gone (the `kill` syscall reports ESRCH).
+_signal_process(pid::Integer, signal::Integer) =
+    ccall(:kill, Cint, (Cint, Cint), pid, signal) == 0
+
 # Drop registry entries for this project whose servers no longer answer a ping.
 # Replaces the old per-project lock: several live servers per project coexist.
 function _prune_dead_entries(project::AbstractString)

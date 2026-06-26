@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `julia +rpc kill [--force]` to terminate a server whose worker is wedged on a non-returning eval. The target resolves from the raw registry (no ping), so a server that cannot answer its socket still resolves; `kill` sends SIGTERM, `--force` sends SIGKILL, the only signal that lands on a tight non-yielding loop. Julia cannot interrupt a running task, so killing the process is the recovery [#38]
 - Bound the client's wait for a result with `--timeout <seconds>`: an eval that does not respond in time frees the caller with a non-zero exit and a message pointing at `julia +rpc kill`, instead of stalling on a wedged server. Without the flag the client waits as long as the eval runs [#38]
 - Capture subprocess and C-library output in rpc evals: a remote eval redirects fd 1/2 to its own pipe for its duration, so `run(cmd)` and C code writing directly to the file descriptors are returned to the client instead of leaking to the server's terminal [#36]
 - Show remote evaluation in the interactive server's REPL: while a `julia +rpc` request runs, a single underscore sweeps through the prompt in every REPL mode and the terminal title shows a busy marker, reverting when it completes. Prompt colors are left at their defaults [#34][#37]

@@ -69,18 +69,17 @@ function _candidates_error(candidates, message::AbstractString)
     return ErrorException(String(take!(io)))
 end
 
-# The selection cascade: explicit port wins; else narrow to the deepest project
-# that owns `project`, pick by --name or auto-select the lone server; finally fall
-# back to a global name match.
-function _resolve_port(port::Integer, project::AbstractString, name::AbstractString)
-    port > 0 && return port
-
-    live = _live_entries()
-    isempty(live) && error("no running REPLicant servers found")
+# The selection cascade over `candidates`: narrow to the deepest project that owns
+# `project`, pick by --name or auto-select the lone server; finally fall back to a
+# global name match. Returns the chosen entry.
+function _select_entry(
+        candidates::Vector{RegistryEntry}, project::AbstractString, name::AbstractString,
+    )
+    isempty(candidates) && error("no running REPLicant servers found")
 
     target = _canonical(isempty(project) ? "." : project)
 
-    owning = filter(live) do entry
+    owning = filter(candidates) do entry
         root = _canonical(entry.project)
         root == target || startswith(target, root * Base.Filesystem.path_separator)
     end
@@ -91,9 +90,9 @@ function _resolve_port(port::Integer, project::AbstractString, name::AbstractStr
             index = findfirst(e -> e.name == name, scoped)
             isnothing(index) &&
                 throw(_candidates_error(scoped, "no server named \"$name\" for $target"))
-            return scoped[index].port
+            return scoped[index]
         end
-        length(scoped) == 1 && return scoped[1].port
+        length(scoped) == 1 && return scoped[1]
         throw(
             _candidates_error(
                 scoped,
@@ -103,15 +102,35 @@ function _resolve_port(port::Integer, project::AbstractString, name::AbstractStr
     end
 
     if !isempty(name)
-        named = filter(e -> e.name == name, live)
-        length(named) == 1 && return named[1].port
+        named = filter(e -> e.name == name, candidates)
+        length(named) == 1 && return named[1]
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
-    elseif length(live) == 1
-        return live[1].port
+    elseif length(candidates) == 1
+        return candidates[1]
     end
 
-    throw(_candidates_error(live, "could not pick a server for $target"))
+    throw(_candidates_error(candidates, "could not pick a server for $target"))
+end
+
+# Resolve an eval target to a port: an explicit port wins and connects directly;
+# otherwise run the cascade over the live servers.
+function _resolve_port(port::Integer, project::AbstractString, name::AbstractString)
+    port > 0 && return port
+    return _select_entry(_live_entries(), project, name).port
+end
+
+# Resolve a kill target to its registry entry. Unlike eval, this reads the raw
+# registry without pinging, so a wedged server that cannot pong still resolves; an
+# explicit port must name a registered server, since kill needs its pid.
+function _kill_target(port::Integer, project::AbstractString, name::AbstractString)
+    entries = _read_entries()
+    if port > 0
+        index = findfirst(e -> e.port == port, entries)
+        isnothing(index) && error("no REPLicant server registered on port $port")
+        return entries[index]
+    end
+    return _select_entry(entries, project, name)
 end
 
 # Consume the value following a flag at `index`, erroring when the flag ends the
@@ -157,6 +176,37 @@ function _parse_client_args(args)
         index += 1
     end
     return (; port, project, name, code, timeout)
+end
+
+function _parse_kill_args(args)
+    port = -1
+    project = ""
+    name = ""
+    force = false
+    index = 1
+    while index <= length(args)
+        arg = args[index]
+        if startswith(arg, "--port=")
+            port = _parse_port(arg[(length("--port=") + 1):end])
+        elseif arg == "--port"
+            value, index = _take_value(args, index, "--port")
+            port = _parse_port(value)
+        elseif startswith(arg, "--project=")
+            project = arg[(length("--project=") + 1):end]
+        elseif arg == "--project"
+            project, index = _take_value(args, index, "--project")
+        elseif startswith(arg, "--name=")
+            name = arg[(length("--name=") + 1):end]
+        elseif arg == "--name"
+            name, index = _take_value(args, index, "--name")
+        elseif arg == "--force" || arg == "-f"
+            force = true
+        else
+            error("unrecognized argument: $arg")
+        end
+        index += 1
+    end
+    return (; port, project, name, force)
 end
 
 function _parse_port(value::AbstractString)
@@ -253,18 +303,46 @@ function _print_row(out, port, name, project, julia, pid, started)
     )
 end
 
+# Terminate a target server's process. Resolves from the raw registry so a wedged
+# server still resolves, sends SIGTERM (SIGKILL with --force), and removes the
+# registry entry, since a SIGKILL skips the server's own cleanup.
+function _kill_server(args; out::IO = stdout)
+    parsed = _parse_kill_args(args)
+    entry = _kill_target(parsed.port, parsed.project, parsed.name)
+    pid = tryparse(Int, entry.pid)
+    isnothing(pid) && error("registry entry for port $(entry.port) has no valid pid")
+
+    path = _registry_entry_path(entry.port)
+    if !_process_alive(pid)
+        rm(path; force = true)
+        println(out, "REPLicant server on port $(entry.port) (pid $pid) was already gone")
+        return 0
+    end
+
+    _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
+    rm(path; force = true)
+    action = parsed.force ? "killed" : "terminated"
+    println(out, "$action REPLicant server on port $(entry.port) (pid $pid)")
+    return 0
+end
+
 """
     cli(args = ARGS; out = stdout, err = stderr) -> Int
 
-Forwarding client entrypoint. With a leading `ls`/`list` it prints the live
-servers; otherwise it resolves a target server and forwards code to it, taken
-from `-e` or, when absent, from stdin. Returns a process exit code.
+Forwarding client entrypoint. A leading `ls`/`list` prints the live servers; a
+leading `kill` terminates a resolved server (`--force` for SIGKILL). Otherwise it
+resolves a target server and forwards code to it, taken from `-e` or, when absent,
+from stdin. `--timeout <seconds>` bounds the wait for a result. Returns a process
+exit code.
 """
 function cli(args = ARGS; out::IO = stdout, err::IO = stderr)
     try
         if !isempty(args) && (args[1] == "ls" || args[1] == "list")
             _list_servers(out)
             return 0
+        end
+        if !isempty(args) && args[1] == "kill"
+            return _kill_server(args[2:end]; out)
         end
         parsed = _parse_client_args(args)
         code = isnothing(parsed.code) ? read(stdin, String) : parsed.code
