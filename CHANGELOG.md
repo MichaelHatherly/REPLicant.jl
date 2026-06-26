@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Answer liveness pings off the worker queue and time the probe out quickly, so `ls` and server resolution stay responsive while a server is mid-evaluation instead of waiting on the request timeout [#35]
+- Point protocol magic and version mismatch errors at reinstalling the rpc channel, since the usual cause is a client and server on different REPLicant versions [#35]
 - Stop the client from crashing when its output pipe closes early (e.g. piping through `head`): the broken-pipe error is swallowed [#32]
 - Capture `display(x)` output, which previously bypassed the result because it writes through the display stack rather than stdout [#32]
 - Suppress the `nothing` echo: a `nothing` result now prints nothing, matching the REPL, so `display(x)` no longer leaves a trailing `nothing` [#33]
@@ -74,3 +76,4 @@ Initial Public Release
 [#32]: https://github.com/MichaelHatherly/REPLicant.jl/issues/32
 [#33]: https://github.com/MichaelHatherly/REPLicant.jl/issues/33
 [#34]: https://github.com/MichaelHatherly/REPLicant.jl/issues/34
+[#35]: https://github.com/MichaelHatherly/REPLicant.jl/issues/35

@@ -66,12 +66,12 @@ end
 # Probe a server with a ping frame, expecting a pong. A different-version server
 # fails the version check and reads as dead, which is the intended lockstep
 # behavior. Matches the liveness check the CLI uses for `ls`.
-function _ping(port::Integer)
+function _ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
     try
         sock = Sockets.connect(Sockets.localhost, port)
         try
             _write_frame(sock, REQUEST_PING, "")
-            frame = _read_frame(sock, RESPONSE_TYPES)
+            frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
             return !isnothing(frame) && frame.type == RESPONSE_PONG
         finally
             close(sock)
