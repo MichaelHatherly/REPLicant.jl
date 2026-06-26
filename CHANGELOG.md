@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Show remote evaluation in the interactive server's REPL: while a `julia +rpc` request runs, the `julia>` prompt turns yellow and the terminal title shows a busy marker, reverting when it completes [#34]
 - Add a help mode: code beginning with `?` returns documentation, like the REPL. With REPL loaded (the interactive server) it is the full `helpmode`, covering operators, keywords, macros, and `?"text"` apropos search; a headless server falls back to `@doc` for bindings, operators, and macros. `??name` gives extended help [#33]
 - Gate CI on a Dendro code-quality scan of the package source: a separate Julia 1.12 job fails the build on high-complexity bands or duplicate, stub, and swallowed-error flags [#28]
 
@@ -72,3 +73,4 @@ Initial Public Release
 [#28]: https://github.com/MichaelHatherly/REPLicant.jl/issues/28
 [#32]: https://github.com/MichaelHatherly/REPLicant.jl/issues/32
 [#33]: https://github.com/MichaelHatherly/REPLicant.jl/issues/33
+[#34]: https://github.com/MichaelHatherly/REPLicant.jl/issues/34

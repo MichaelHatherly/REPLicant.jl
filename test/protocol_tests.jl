@@ -182,6 +182,25 @@ end
     end
 end
 
+@testitem "eval_runs_while_busy" tags = [:protocol] setup = [Utilities] begin
+    Utilities.withserver() do server, mod, port
+        # Code is evaluated while the busy signal is set, so a remote eval can
+        # observe `_is_busy()` as true. Outside the eval the server is idle.
+        Core.eval(mod, :(import REPLicant))
+        @test Utilities.request(port, "REPLicant._is_busy()") == "true"
+        @test !REPLicant._is_busy()
+    end
+end
+
+@testitem "ping_leaves_idle" tags = [:protocol] setup = [Utilities] begin
+    Utilities.withserver() do server, mod, port
+        # A liveness ping never enters the eval path, so it never marks busy.
+        frame = Utilities.requestframe(port, REPLicant.REQUEST_PING, "")
+        @test frame.type == REPLicant.RESPONSE_PONG
+        @test !REPLicant._is_busy()
+    end
+end
+
 @testitem "noncompliant_frame_rejected" tags = [:protocol] setup = [Utilities] begin
     import Sockets
 
