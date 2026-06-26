@@ -30,6 +30,19 @@ avoids the question.
 Output is REPL-style: captured stdout and stderr first, then the value, or a
 scrubbed error with backtrace.
 
+## Bounding the wait
+
+By default the client waits as long as the eval runs, so a deliberate long compute
+returns its result. To cap the wait, pass `--timeout <seconds>`:
+
+```bash
+julia +rpc --timeout 10 -e 'long_running()'
+```
+
+On expiry the client exits non-zero and prints a message pointing at `julia +rpc
+kill`. The eval keeps running on the server; the timeout only frees the caller.
+See `servers.md` for recovering a wedged server.
+
 ## Help mode
 
 A leading `?` returns documentation, like the REPL's help mode. Use `?name` for

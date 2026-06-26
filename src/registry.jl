@@ -63,23 +63,29 @@ function _write_registry_entry(
     return path
 end
 
-# Probe a server with a ping frame, expecting a pong. A different-version server
-# fails the version check and reads as dead, which is the intended lockstep
-# behavior. Matches the liveness check the CLI uses for `ls`.
-function _ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
+# Probe a server with a ping frame. Returns the pong body (a busy-since marker,
+# empty when idle) when the server answers, or `nothing` when it does not. A
+# different-version server fails the version check and reads as dead, which is the
+# intended lockstep behavior.
+function _ping_status(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
     try
         sock = Sockets.connect(Sockets.localhost, port)
         try
             _write_frame(sock, REQUEST_PING, "")
             frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
-            return !isnothing(frame) && frame.type == RESPONSE_PONG
+            (isnothing(frame) || frame.type != RESPONSE_PONG) && return nothing
+            return frame.body
         finally
             close(sock)
         end
     catch
-        return false
+        return nothing
     end
 end
+
+# Liveness as a boolean, for prune and resolution. Matches the check `ls` uses.
+_ping(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS) =
+    !isnothing(_ping_status(port; timeout_seconds))
 
 # Signals for terminating a server process. SIGTERM asks; SIGKILL forces and is
 # the only stop that lands on a worker wedged in a tight, non-yielding loop.

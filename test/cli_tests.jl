@@ -60,6 +60,46 @@ end
     end
 end
 
+@testitem "status_formatting" tags = [:cli] begin
+    import REPLicant
+    import Dates
+
+    # An empty pong body is an idle server.
+    @test REPLicant._format_status("") == "idle"
+
+    # A timestamp marks a busy server, rendered with elapsed seconds.
+    marker = string(Dates.now() - Dates.Second(5))
+    rendered = REPLicant._format_status(marker)
+    @test contains(rendered, "busy")
+    @test contains(rendered, "s")
+
+    # A garbled marker still reads as busy rather than crashing.
+    @test contains(REPLicant._format_status("not-a-date"), "busy")
+end
+
+@testitem "ls_reports_busy_state" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        # An idle server: empty pong body, STATUS column shows idle.
+        @test REPLicant._ping_status(port) == ""
+        out = IOBuffer()
+        @test REPLicant.cli(["ls"]; out) == 0
+        listing = String(take!(out))
+        @test contains(listing, "STATUS")
+        @test contains(listing, "idle")
+
+        # Occupy the worker; the pong now carries a busy-since marker and ls
+        # renders the server busy.
+        busy = @async Utilities.request(port, "sleep(2)")
+        sleep(0.5)
+        @test !isempty(REPLicant._ping_status(port))
+        @test REPLicant.cli(["ls"]; out) == 0
+        @test contains(String(take!(out)), "busy")
+        wait(busy)
+    end
+end
+
 @testitem "client_send_and_ls" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

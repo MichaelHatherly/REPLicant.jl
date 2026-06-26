@@ -141,6 +141,30 @@ function _take_value(args, index, flag)
     return args[index], index
 end
 
+# Match a server selector (`--port`/`--project`/`--name`) at `index`, shared by the
+# eval and kill parsers. Returns the updated selectors, the advanced index, and
+# whether the flag matched, so each parser handles only its own extra flags.
+function _match_selector(args, index, port, project, name)
+    arg = args[index]
+    if startswith(arg, "--port=")
+        port = _parse_port(arg[(length("--port=") + 1):end])
+    elseif arg == "--port"
+        value, index = _take_value(args, index, "--port")
+        port = _parse_port(value)
+    elseif startswith(arg, "--project=")
+        project = arg[(length("--project=") + 1):end]
+    elseif arg == "--project"
+        project, index = _take_value(args, index, "--project")
+    elseif startswith(arg, "--name=")
+        name = arg[(length("--name=") + 1):end]
+    elseif arg == "--name"
+        name, index = _take_value(args, index, "--name")
+    else
+        return port, project, name, index, false
+    end
+    return port, project, name, index, true
+end
+
 function _parse_client_args(args)
     port = -1
     project = ""
@@ -149,29 +173,19 @@ function _parse_client_args(args)
     timeout = nothing
     index = 1
     while index <= length(args)
-        arg = args[index]
-        if startswith(arg, "--port=")
-            port = _parse_port(arg[(length("--port=") + 1):end])
-        elseif arg == "--port"
-            value, index = _take_value(args, index, "--port")
-            port = _parse_port(value)
-        elseif startswith(arg, "--project=")
-            project = arg[(length("--project=") + 1):end]
-        elseif arg == "--project"
-            project, index = _take_value(args, index, "--project")
-        elseif startswith(arg, "--name=")
-            name = arg[(length("--name=") + 1):end]
-        elseif arg == "--name"
-            name, index = _take_value(args, index, "--name")
-        elseif startswith(arg, "--timeout=")
-            timeout = _parse_timeout(arg[(length("--timeout=") + 1):end])
-        elseif arg == "--timeout"
-            value, index = _take_value(args, index, "--timeout")
-            timeout = _parse_timeout(value)
-        elseif arg == "-e" || arg == "--eval"
-            code, index = _take_value(args, index, "-e")
-        else
-            error("unrecognized argument: $arg")
+        port, project, name, index, matched = _match_selector(args, index, port, project, name)
+        if !matched
+            arg = args[index]
+            if startswith(arg, "--timeout=")
+                timeout = _parse_timeout(arg[(length("--timeout=") + 1):end])
+            elseif arg == "--timeout"
+                value, index = _take_value(args, index, "--timeout")
+                timeout = _parse_timeout(value)
+            elseif arg == "-e" || arg == "--eval"
+                code, index = _take_value(args, index, "-e")
+            else
+                error("unrecognized argument: $arg")
+            end
         end
         index += 1
     end
@@ -185,24 +199,14 @@ function _parse_kill_args(args)
     force = false
     index = 1
     while index <= length(args)
-        arg = args[index]
-        if startswith(arg, "--port=")
-            port = _parse_port(arg[(length("--port=") + 1):end])
-        elseif arg == "--port"
-            value, index = _take_value(args, index, "--port")
-            port = _parse_port(value)
-        elseif startswith(arg, "--project=")
-            project = arg[(length("--project=") + 1):end]
-        elseif arg == "--project"
-            project, index = _take_value(args, index, "--project")
-        elseif startswith(arg, "--name=")
-            name = arg[(length("--name=") + 1):end]
-        elseif arg == "--name"
-            name, index = _take_value(args, index, "--name")
-        elseif arg == "--force" || arg == "-f"
-            force = true
-        else
-            error("unrecognized argument: $arg")
+        port, project, name, index, matched = _match_selector(args, index, port, project, name)
+        if !matched
+            arg = args[index]
+            if arg == "--force" || arg == "-f"
+                force = true
+            else
+                error("unrecognized argument: $arg")
+            end
         end
         index += 1
     end
@@ -269,10 +273,29 @@ function _send(
     end
 end
 
+# Render a pong body as a status: empty is idle, a timestamp is busy with elapsed
+# seconds. A marker that does not parse still reads as busy rather than crashing.
+function _format_status(marker::AbstractString)
+    isempty(marker) && return "idle"
+    since = tryparse(Dates.DateTime, marker)
+    isnothing(since) && return "busy"
+    seconds = max(0, round(Int, (Dates.now() - since).value / 1000))
+    return "busy $(seconds)s"
+end
+
 function _list_servers(out::IO = stdout)
-    live = sort(_live_entries(); by = entry -> entry.port)
-    _print_row(out, "PORT", "NAME", "PROJECT", "JULIA", "PID", "STARTED")
-    for entry in live
+    rows = Tuple{RegistryEntry, String}[]
+    for entry in _read_entries()
+        status = _ping_status(entry.port)
+        if isnothing(status)
+            rm(_registry_entry_path(entry.port); force = true)
+        else
+            push!(rows, (entry, status))
+        end
+    end
+    sort!(rows; by = row -> row[1].port)
+    _print_row(out, "PORT", "NAME", "PROJECT", "JULIA", "PID", "STARTED", "STATUS")
+    for (entry, status) in rows
         _print_row(
             out,
             string(entry.port),
@@ -281,12 +304,17 @@ function _list_servers(out::IO = stdout)
             entry.julia,
             entry.pid,
             entry.started,
+            _format_status(status),
         )
     end
     return nothing
 end
 
-function _print_row(out, port, name, project, julia, pid, started)
+function _print_row(
+        out::IO, port::AbstractString, name::AbstractString, project::AbstractString,
+        julia::AbstractString, pid::AbstractString, started::AbstractString,
+        status::AbstractString,
+    )
     return println(
         out,
         rpad(port, 6),
@@ -299,7 +327,9 @@ function _print_row(out, port, name, project, julia, pid, started)
         "  ",
         rpad(pid, 7),
         "  ",
-        started,
+        rpad(started, 23),
+        "  ",
+        status,
     )
 end
 

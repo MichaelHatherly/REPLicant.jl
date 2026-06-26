@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Show evaluation state in `julia +rpc ls`: a `STATUS` column reads `idle`, or `busy <n>s` while the server is mid-evaluation, carried in the pong body so a wedged server is visible without a separate probe [#38]
 - Add `julia +rpc kill [--force]` to terminate a server whose worker is wedged on a non-returning eval. The target resolves from the raw registry (no ping), so a server that cannot answer its socket still resolves; `kill` sends SIGTERM, `--force` sends SIGKILL, the only signal that lands on a tight non-yielding loop. Julia cannot interrupt a running task, so killing the process is the recovery [#38]
 - Bound the client's wait for a result with `--timeout <seconds>`: an eval that does not respond in time frees the caller with a non-zero exit and a message pointing at `julia +rpc kill`, instead of stalling on a wedged server. Without the flag the client waits as long as the eval runs [#38]
 - Capture subprocess and C-library output in rpc evals: a remote eval redirects fd 1/2 to its own pipe for its duration, so `run(cmd)` and C code writing directly to the file descriptors are returned to the client instead of leaking to the server's terminal [#36]
@@ -24,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop discarding the result of an eval that runs longer than 30 seconds: the client read no longer applies the request timeout to the response, so a long compute returns instead of erroring [#38]
 - Answer liveness pings off the worker queue and time the probe out quickly, so `ls` and server resolution stay responsive while a server is mid-evaluation instead of waiting on the request timeout [#35]
 - Point protocol magic and version mismatch errors at reinstalling the rpc channel, since the usual cause is a client and server on different REPLicant versions [#35]
 - Stop the client from crashing when its output pipe closes early (e.g. piping through `head`): the broken-pipe error is swallowed [#32]
