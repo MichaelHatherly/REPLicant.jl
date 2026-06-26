@@ -2,34 +2,26 @@
 # Output capture.
 #
 # Output is routed per task rather than redirected process-wide. A remote eval
-# binds `CAPTURE_TARGET` to its own buffer for the eval's dynamic extent; the
-# routing IO and display steer Julia-level writes to that buffer when bound and
-# to the real streams otherwise. The interactive REPL's output, running with no
-# binding, reaches the terminal even while an eval is in flight.
+# binds `CAPTURE_TARGET` to its own pipe for the eval's dynamic extent; the
+# routing IO and display steer Julia-level writes to that pipe when bound and
+# to the real streams otherwise. The eval also redirects the raw fds 1/2 to the
+# same pipe, so subprocess and C-library output is captured too. The interactive
+# REPL's output, running with no binding, reaches the terminal even while an eval
+# is in flight.
 
-# The process's real streams, captured when routing is installed. `redirect_stdout`
-# dups these fd-backed streams' fds back onto fd 1/2, so raw fd writes (subprocess,
-# C library) still reach the terminal; the routers steer only Julia-level writes.
+# The process's real streams, captured when routing is installed. These TTYs write
+# to the terminal through their own libuv handles, independent of fd 1/2. Idle,
+# their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its pipe and
+# restores these afterward. The routers steer Julia-level writes to them when no
+# capture target is bound.
 const REAL_OUT = Ref{IO}()
 const REAL_ERR = Ref{IO}()
 
-# The current eval's capture buffer, or `nothing` when no eval is active. Bound by
-# `with(CAPTURE_TARGET => buf)` and, on 1.11+, inherited by child tasks the eval
-# spawns. `_capture` binds a `LockedIO`, so concurrent writes from inherited tasks
-# serialize.
+# The current eval's capture target, or `nothing` when no eval is active. Bound by
+# `with(CAPTURE_TARGET => pipe.in)` and, on 1.11+, inherited by child tasks the
+# eval spawns. `_capture` binds the pipe's write end, a `LibuvStream` whose `write`
+# locks internally, so concurrent writes from inherited tasks stay safe.
 const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
-
-# Serializes writes to an `IOBuffer`. Inherited child tasks can write to the same
-# capture buffer concurrently, and `IOBuffer` is not thread-safe.
-struct LockedIO <: Base.AbstractPipe
-    buffer::IOBuffer
-    lock::ReentrantLock
-end
-LockedIO(buffer::IOBuffer) = LockedIO(buffer, ReentrantLock())
-
-Base.pipe_writer(l::LockedIO) = l.buffer
-Base.unsafe_write(l::LockedIO, p::Ptr{UInt8}, n::UInt) = @lock l.lock unsafe_write(l.buffer, p, n)
-Base.write(l::LockedIO, b::UInt8) = @lock l.lock write(l.buffer, b)
 
 # Routing streams installed via `redirect_stdout`/`redirect_stderr`. `pipe_writer`
 # returns the captured fd-backed stream so the redirect dups its fd unchanged;
@@ -95,29 +87,60 @@ function _uninstall_routing!()
     return nothing
 end
 
-# Run `f` with its Julia-level output captured, returning the captured text
-# alongside the value (or the thrown exception and its backtrace).
-# InterruptException is rethrown so long-running code stays interruptible.
+# Run `f` with its output captured, returning the captured text alongside the
+# value (or the thrown exception and its backtrace). InterruptException is rethrown
+# so long-running code stays interruptible.
+#
+# A single pipe sinks every strand of the eval's output in write order: the
+# routers and the display steer Julia-level writes there via `CAPTURE_TARGET`, the
+# logger writes its records there, and fd 1/2 are redirected to it so subprocess
+# and C-library output land there too. fd 1 is process-global, so a subprocess
+# launched at the REPL prompt during an eval is captured into that eval; the worker
+# is sequential, so this is rare and accepted.
 function _capture(f)
     # Capture routes through the installed streams. The server installs them at
     # start; install here too so a direct `_capture` (e.g. a test) still routes.
     _install_routing!()
-    target = LockedIO(IOBuffer())
-    logger = Logging.ConsoleLogger(target)
 
-    value, errored, backtrace = with(CAPTURE_TARGET => target) do
+    pipe = Pipe()
+    Base.link_pipe!(pipe; reader_supports_async = true, writer_supports_async = true)
+    # Redirect only the raw fds, not the global `stdout`/`stderr` bindings: those
+    # stay the routers. `_redirect_io_libc` is the primitive `redirect_stdout`
+    # calls; it dups the fd portably (Windows `SetStdHandle` handled internally).
+    Base._redirect_io_libc(pipe.in, 1)
+    Base._redirect_io_libc(pipe.in, 2)
+    logger = Logging.ConsoleLogger(pipe.in)
+
+    # Spawning the reader task draws from the task RNG; copy and restore it so
+    # user code sees an unperturbed random stream.
+    old_rng = copy(Random.default_rng())
+    buffer = IOBuffer()
+    reader = @async write(buffer, pipe)
+    copy!(Random.default_rng(), old_rng)
+
+    value, errored, backtrace = with(CAPTURE_TARGET => pipe.in) do
         Logging.with_logger(logger) do
             try
+                yield()  # let the reader task start draining the pipe
                 f(), false, Vector{Ptr{Cvoid}}()
             catch err
                 err isa InterruptException && rethrow()
                 err, true, catch_backtrace()
+            finally
+                # Drain libc's own stdio buffers into the pipe before restoring
+                # the fds, so fully-buffered C output (e.g. `puts`) is captured
+                # rather than flushed to the terminal at process exit.
+                Base.Libc.flush_cstdio()
+                Base._redirect_io_libc(REAL_OUT[], 1)
+                Base._redirect_io_libc(REAL_ERR[], 2)
+                close(pipe.in)
+                wait(reader)
             end
         end
     end
 
     return (
-        output = @lock(target.lock, String(take!(target.buffer))),
+        output = String(take!(buffer)),
         value = value,
         error = errored,
         backtrace = backtrace,

@@ -24,6 +24,7 @@ module REPLicant
 import Dates
 import Logging
 import PrecompileTools
+import Random
 import Sockets
 
 # `Base.ScopedValues` exists on 1.11+; vendor the slice the capture path needs on

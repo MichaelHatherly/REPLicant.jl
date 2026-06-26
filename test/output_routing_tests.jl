@@ -11,14 +11,14 @@ end
     import REPLicant
 
     REPLicant._install_routing!()
-    target = REPLicant.LockedIO(IOBuffer())
+    target = IOBuffer()
     REPLicant.with(REPLicant.CAPTURE_TARGET => target) do
         # `println` routes through the installed stdout router; `display` through
         # the display router. Both land in the bound target.
         println("printed")
         display(REPLicant.RouterDisplay(), 42)
     end
-    out = String(take!(target.buffer))
+    out = String(take!(target))
     @test contains(out, "printed")
     @test contains(out, "42")
 end
@@ -30,11 +30,11 @@ end
     # 1.10 value is same-task, so child output falls through there; gate the assertion.
     if isdefined(Base, :ScopedValues)
         REPLicant._install_routing!()
-        target = REPLicant.LockedIO(IOBuffer())
+        target = IOBuffer()
         REPLicant.with(REPLicant.CAPTURE_TARGET => target) do
             wait(Threads.@spawn println("from_child"))
         end
-        @test contains(String(take!(target.buffer)), "from_child")
+        @test contains(String(take!(target)), "from_child")
     else
         @test true skip = true
     end
