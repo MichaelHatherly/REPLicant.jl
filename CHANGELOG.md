@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Stop the client from crashing when its output pipe closes early (e.g. piping through `head`): the broken-pipe error is swallowed [#32]
+- Capture `display(x)` output, which previously bypassed the result because it writes through the display stack rather than stdout [#32]
 
 ## [v2.0.0] - 2026-06-19
 

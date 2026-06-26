@@ -13,6 +13,9 @@ function _capture(f)
     Base.link_pipe!(pipe; reader_supports_async = true, writer_supports_async = true)
     redirect_stdout(pipe.in)
     redirect_stderr(pipe.in)
+    # `display(x)` writes through the display stack, not the redirected stdout, so
+    # push a text display onto the pipe to capture it too.
+    pushdisplay(Base.Multimedia.TextDisplay(pipe.in))
     logger = Logging.ConsoleLogger(pipe.in)
 
     # Spawning the reader task draws from the task RNG; copy and restore it so
@@ -32,6 +35,7 @@ function _capture(f)
         finally
             redirect_stdout(default_stdout)
             redirect_stderr(default_stderr)
+            popdisplay()
             close(pipe.in)
             wait(reader)
         end

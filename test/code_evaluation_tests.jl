@@ -86,3 +86,12 @@ end
     result = REPLicant._evaluate("\"Hello \\\"World\\\"\"", 1, mod)
     @test strip(result.output) == "\"Hello \\\"World\\\"\""
 end
+
+@testitem "eval_display_output_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    # `display(x)` writes through the display stack, not stdout; it must still be
+    # captured alongside ordinary printed output.
+    result = REPLicant._evaluate("display([1, 2, 3]); println(\"after\")", 1, mod)
+    @test contains(result.output, "3-element Vector{Int64}")
+    @test contains(result.output, "after")
+end
