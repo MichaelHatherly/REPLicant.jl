@@ -55,7 +55,7 @@ function _read_with_timeout(thunk, sock; timeout_seconds = READ_TIMEOUT_SECONDS)
 end
 
 # Write one frame: the fixed header, then the body bytes.
-function _write_frame(io::IO, type::UInt8, body::AbstractString)
+function _write_frame(io::IO, type::UInt8, body::String)
     write(io, PROTOCOL_MAGIC)
     write(io, PROTOCOL_VERSION)
     write(io, type)
@@ -67,7 +67,7 @@ end
 
 # Validate a frame header and return its `(type, body_length)`. Throws on any
 # compliance violation: bad magic, wrong version, unknown type, oversized body.
-function _parse_header(header, valid_types, max_bytes)
+function _parse_header(header::Vector{UInt8}, valid_types::Tuple{Vararg{UInt8}}, max_bytes::Int)
     buffer = IOBuffer(header)
     magic = read(buffer, length(PROTOCOL_MAGIC))
     magic == PROTOCOL_MAGIC ||
@@ -78,7 +78,7 @@ function _parse_header(header, valid_types, max_bytes)
         error("Protocol version mismatch: expected $(PROTOCOL_VERSION), got $version")
 
     type = read(buffer, UInt8)
-    type in valid_types || error("Unknown message type: $type")
+    any(==(type), valid_types) || error("Unknown message type: $type")
 
     count = Int(ntoh(read(buffer, UInt32)))
     count > max_bytes &&
@@ -90,13 +90,13 @@ end
 # Read one frame, validating it against `valid_types`. Returns `(; type, body)`,
 # or `nothing` when the peer closed without sending (a bare disconnect).
 function _read_frame(
-        sock, valid_types;
+        sock::IO, valid_types::Tuple{Vararg{UInt8}};
         timeout_seconds = READ_TIMEOUT_SECONDS,
-        max_bytes = MAX_REQUEST_BYTES,
+        max_bytes::Int = MAX_REQUEST_BYTES,
     )
     header = _read_with_timeout(sock; timeout_seconds) do
         read(sock, FRAME_HEADER_BYTES)
-    end
+    end::Vector{UInt8}
     isempty(header) && return nothing
     length(header) == FRAME_HEADER_BYTES ||
         error("Incomplete frame header: expected $FRAME_HEADER_BYTES bytes, got $(length(header))")
@@ -106,7 +106,7 @@ function _read_frame(
 
     body = _read_with_timeout(sock; timeout_seconds) do
         read(sock, count)
-    end
+    end::Vector{UInt8}
     length(body) == count ||
         error("Incomplete frame: expected $count body bytes, got $(length(body))")
     return (; type, body = String(body))
@@ -115,7 +115,7 @@ end
 # Drain the client's framed request before replying so it completes its write and
 # reads the rejection, rather than hitting EPIPE on flush against a socket we
 # already closed.
-function _reject_at_capacity(sock, id, read_timeout_seconds)
+function _reject_at_capacity(sock::IO, id, read_timeout_seconds)
     return try
         _read_frame(sock, REQUEST_TYPES; timeout_seconds = read_timeout_seconds)
         _write_frame(sock, RESPONSE_ERR, "Server at capacity, please retry")
@@ -126,7 +126,7 @@ function _reject_at_capacity(sock, id, read_timeout_seconds)
     end
 end
 
-function _handle_client(sock, id, mod, read_timeout_seconds, verbose)
+function _handle_client(sock::IO, id, mod, read_timeout_seconds, verbose)
     return try
         frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds = read_timeout_seconds)
 

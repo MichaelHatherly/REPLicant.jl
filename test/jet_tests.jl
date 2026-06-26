@@ -16,11 +16,11 @@
         # the Julia and JET versions (JET 0.10 on Julia 1.12), so the ratchet runs
         # only there.
         JET_JULIA = v"1.12"
-        # +20 over the pre-frame baseline (312): the framed protocol's frame reader
-        # returns `Union{Nothing, NamedTuple}` and dispatches on the type code, and
-        # capturing `display` output adds display-stack dispatch. Intentional
+        # +4 over the pre-frame baseline (312): the residual is the framed
+        # protocol's bare-disconnect `Union{Nothing, NamedTuple}`, keyword-argument
+        # machinery, and `display`-stack dispatch from output capture. Intentional
         # socket-IO/eval dispatch the ratchet tolerates.
-        SOUND_LIMIT = 332   # JET.report_package(REPLicant; mode = :sound)
+        SOUND_LIMIT = 316   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_client_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
