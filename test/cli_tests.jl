@@ -24,6 +24,42 @@
     @test_throws Exception REPLicant._parse_client_args(["--bogus"])
 end
 
+@testitem "client_timeout_parsing" tags = [:cli] begin
+    import REPLicant
+
+    # No --timeout means no bound: the client waits as long as the eval runs.
+    @test isnothing(REPLicant._parse_client_args(["-e", "1"]).timeout)
+
+    @test REPLicant._parse_client_args(["--timeout=2.5", "-e", "1"]).timeout == 2.5
+    @test REPLicant._parse_client_args(["--timeout", "3", "-e", "1"]).timeout == 3.0
+
+    @test_throws Exception REPLicant._parse_client_args(["--timeout=abc"])
+    @test_throws Exception REPLicant._parse_client_args(["--timeout=0"])
+    @test_throws Exception REPLicant._parse_client_args(["--timeout=-1"])
+    @test_throws Exception REPLicant._parse_client_args(["--timeout"])
+end
+
+@testitem "client_timeout_frees_caller" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        err = IOBuffer()
+        # A non-returning eval holds the worker; --timeout frees the caller without
+        # waiting for a response.
+        elapsed = @elapsed code =
+            REPLicant.cli(["--port=$port", "--timeout=0.5", "-e", "sleep(3)"]; out, err)
+        @test code == 1
+        @test elapsed < 2
+        @test isempty(String(take!(out)))
+        # The error names the timeout and points at kill as the recovery.
+        message = String(take!(err))
+        @test contains(message, "kill")
+        # The server is still alive: pings are answered off the wedged worker.
+        @test REPLicant._ping(port)
+    end
+end
+
 @testitem "client_send_and_ls" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

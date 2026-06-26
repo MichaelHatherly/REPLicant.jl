@@ -127,6 +127,7 @@ function _parse_client_args(args)
     project = ""
     name = ""
     code = nothing
+    timeout = nothing
     index = 1
     while index <= length(args)
         arg = args[index]
@@ -143,6 +144,11 @@ function _parse_client_args(args)
             name = arg[(length("--name=") + 1):end]
         elseif arg == "--name"
             name, index = _take_value(args, index, "--name")
+        elseif startswith(arg, "--timeout=")
+            timeout = _parse_timeout(arg[(length("--timeout=") + 1):end])
+        elseif arg == "--timeout"
+            value, index = _take_value(args, index, "--timeout")
+            timeout = _parse_timeout(value)
         elseif arg == "-e" || arg == "--eval"
             code, index = _take_value(args, index, "-e")
         else
@@ -150,13 +156,19 @@ function _parse_client_args(args)
         end
         index += 1
     end
-    return (; port, project, name, code)
+    return (; port, project, name, code, timeout)
 end
 
 function _parse_port(value::AbstractString)
     port = tryparse(Int, value)
     isnothing(port) && error("invalid --port: $value")
     return port
+end
+
+function _parse_timeout(value::AbstractString)
+    seconds = tryparse(Float64, value)
+    (isnothing(seconds) || seconds <= 0) && error("invalid --timeout: $value")
+    return seconds
 end
 
 # Write the result, terminating a non-empty payload with a newline so output does
@@ -174,12 +186,27 @@ function _write_payload(io::IO, payload::String)
 end
 
 # Send an eval frame and route the response: `ok` to `out`, `err` to `err`.
-# Returns a process exit code, non-zero when the evaluation errored.
-function _send(port::Integer, code::String; out::IO = stdout, err::IO = stderr)
+# Returns a process exit code, non-zero when the evaluation errored. `timeout_seconds`
+# bounds the wait for the result; `nothing` waits as long as the eval runs.
+function _send(
+        port::Integer, code::String;
+        out::IO = stdout, err::IO = stderr, timeout_seconds = nothing,
+    )
     sock = Sockets.connect(Sockets.localhost, port)
     try
         _write_frame(sock, REQUEST_EVAL, code)
-        frame = _read_frame(sock, RESPONSE_TYPES)
+        frame = try
+            _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
+        catch timeout
+            timeout isa ReadTimeout || rethrow()
+            throw(
+                ErrorException(
+                    "evaluation did not respond within $(timeout.timeout_seconds)s; \
+                    the server may be wedged on a long-running or non-returning eval. \
+                    Recover with: julia +rpc kill",
+                ),
+            )
+        end
         isnothing(frame) && error("server closed the connection without a response")
         if frame.type == RESPONSE_ERR
             _write_payload(err, frame.body)
@@ -242,7 +269,7 @@ function cli(args = ARGS; out::IO = stdout, err::IO = stderr)
         parsed = _parse_client_args(args)
         code = isnothing(parsed.code) ? read(stdin, String) : parsed.code
         target = _resolve_port(parsed.port, parsed.project, parsed.name)
-        return _send(target, code; out, err)
+        return _send(target, code; out, err, timeout_seconds = parsed.timeout)
     catch error
         error isa InterruptException && rethrow()
         message = error isa ErrorException ? error.msg : sprint(showerror, error)
