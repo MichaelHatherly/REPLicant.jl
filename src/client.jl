@@ -159,6 +159,17 @@ function _parse_port(value::AbstractString)
     return port
 end
 
+# Write the result, tolerating a reader that closed early (e.g. `| head`): an
+# EPIPE on a closed output pipe is the reader's choice, not a client error.
+function _write_payload(io::IO, payload::AbstractString)
+    try
+        write(io, payload)
+    catch error
+        error isa Base.IOError || rethrow()
+    end
+    return nothing
+end
+
 # Send an eval frame and route the response: `ok` to `out`, `err` to `err`.
 # Returns a process exit code, non-zero when the evaluation errored.
 function _send(port::Integer, code::AbstractString; out::IO = stdout, err::IO = stderr)
@@ -168,10 +179,10 @@ function _send(port::Integer, code::AbstractString; out::IO = stdout, err::IO = 
         frame = _read_frame(sock, RESPONSE_TYPES)
         isnothing(frame) && error("server closed the connection without a response")
         if frame.type == RESPONSE_ERR
-            write(err, frame.body)
+            _write_payload(err, frame.body)
             return 1
         end
-        write(out, frame.body)
+        _write_payload(out, frame.body)
         return 0
     finally
         close(sock)

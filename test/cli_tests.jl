@@ -59,6 +59,24 @@ end
     end
 end
 
+@testitem "client_tolerates_closed_output_pipe" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # A sink that fails every write the way a pipe closed by `| head` does.
+    struct BrokenPipe <: IO end
+    Base.unsafe_write(::BrokenPipe, ::Ptr{UInt8}, ::UInt) =
+        throw(Base.IOError("write: broken pipe (EPIPE)", -32))
+
+    # The payload write is swallowed, not propagated.
+    @test isnothing(REPLicant._write_payload(BrokenPipe(), "42"))
+
+    # An EPIPE while writing the result does not crash the client; it still
+    # reports the evaluation's exit code.
+    Utilities.withserver() do server, mod, port
+        @test REPLicant._send(port, "2 + 2"; out = BrokenPipe()) == 0
+    end
+end
+
 @testitem "client_eval_error_routes_to_stderr" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

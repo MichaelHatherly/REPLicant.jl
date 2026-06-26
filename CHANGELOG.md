@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Replace the length-prefixed wire protocol with a versioned binary frame protocol: a fixed header (magic, version, type code, body length) is validated on every message, and evaluation errors return a distinct frame type so the client routes them to stderr and exits non-zero [#32]
 
+### Fixed
+
+- Stop the client from crashing when its output pipe closes early (e.g. piping through `head`): the broken-pipe error is swallowed [#32]
+
 ## [v2.0.0] - 2026-06-19
 
 ### Added
