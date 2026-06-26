@@ -159,11 +159,14 @@ function _parse_port(value::AbstractString)
     return port
 end
 
-# Write the result, tolerating a reader that closed early (e.g. `| head`): an
-# EPIPE on a closed output pipe is the reader's choice, not a client error.
+# Write the result, terminating a non-empty payload with a newline so output does
+# not run into the shell prompt. Tolerates a reader that closed early (e.g.
+# `| head`): an EPIPE on a closed output pipe is the reader's choice, not a
+# client error.
 function _write_payload(io::IO, payload::AbstractString)
     try
         write(io, payload)
+        isempty(payload) || endswith(payload, '\n') || write(io, '\n')
     catch error
         error isa Base.IOError || rethrow()
     end
