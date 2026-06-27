@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `julia +rpc interrupt` to free a server wedged on a running eval without killing it: the request schedules an `InterruptException` onto the running evaluation, answered off the worker queue so it reaches a busy server, leaving the session and its loaded state intact. The worker runs each eval in its own task, so the interrupt frees that eval alone and the server keeps serving. Delivery is cooperative, so a tight non-yielding loop still needs `kill`; `interrupt` is the soft recovery tier [#39]
 - Show evaluation state in `julia +rpc ls`: a `STATUS` column reads `idle`, or `busy <n>s` while the server is mid-evaluation, carried in the pong body so a wedged server is visible without a separate probe [#38]
 - Add `julia +rpc kill [--force]` to terminate a server whose worker is wedged on a non-returning eval. The target resolves from the raw registry (no ping), so a server that cannot answer its socket still resolves; `kill` sends SIGTERM, `--force` sends SIGKILL, the only signal that lands on a tight non-yielding loop. Julia cannot interrupt a running task, so killing the process is the recovery [#38]
 - Bound the client's wait for a result with `--timeout <seconds>`: an eval that does not respond in time frees the caller with a non-zero exit and a message pointing at `julia +rpc kill`, instead of stalling on a wedged server. Without the flag the client waits as long as the eval runs [#38]
@@ -84,3 +85,4 @@ Initial Public Release
 [#35]: https://github.com/MichaelHatherly/REPLicant.jl/issues/35
 [#36]: https://github.com/MichaelHatherly/REPLicant.jl/issues/36
 [#38]: https://github.com/MichaelHatherly/REPLicant.jl/issues/38
+[#39]: https://github.com/MichaelHatherly/REPLicant.jl/issues/39

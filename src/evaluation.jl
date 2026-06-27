@@ -125,7 +125,13 @@ function _capture(f)
                 f(), false, Vector{Ptr{Cvoid}}()
             catch err
                 err isa InterruptException && rethrow()
-                err, true, catch_backtrace()
+                # `include_string` wraps an interrupt thrown in user code as a
+                # `LoadError`. Report it to the client like any error, but with no
+                # backtrace: the exception was delivered asynchronously at an
+                # arbitrary point, and walking that stack under threads deadlocks in
+                # the runtime's stack lookup.
+                interrupted = err isa LoadError && err.error isa InterruptException
+                err, true, (interrupted ? Ptr{Cvoid}[] : catch_backtrace())
             finally
                 # Drain libc's own stdio buffers into the pipe before restoring
                 # the fds, so fully-buffered C output (e.g. `puts`) is captured

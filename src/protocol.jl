@@ -9,10 +9,10 @@
 #   length   UInt32 (BE)  4 bytes  body byte count
 #   body     length bytes          UTF-8
 #
-# Request types are `eval`/`ping`, response types `ok`/`err`/`pong`. The type code
-# is an open enum: new response codes (a serialized value, a MIME bundle) extend
-# the protocol without a format break. Every read validates magic, version, type,
-# and length before trusting the body.
+# Request types are `eval`/`ping`/`interrupt`, response types `ok`/`err`/`pong`.
+# The type code is an open enum: new response codes (a serialized value, a MIME
+# bundle) extend the protocol without a format break. Every read validates magic,
+# version, type, and length before trusting the body.
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
@@ -33,11 +33,12 @@ const FRAME_HEADER_BYTES = length(PROTOCOL_MAGIC) + 6  # magic + version + type 
 
 const REQUEST_EVAL = 0x01
 const REQUEST_PING = 0x02
+const REQUEST_INTERRUPT = 0x03
 const RESPONSE_OK = 0x01
 const RESPONSE_ERR = 0x02
 const RESPONSE_PONG = 0x03
 
-const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING)
+const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING, REQUEST_INTERRUPT)
 const RESPONSE_TYPES = (RESPONSE_OK, RESPONSE_ERR, RESPONSE_PONG)
 
 # A read that outlived its bound. Carries the bound so callers can phrase their own
