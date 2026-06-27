@@ -64,6 +64,11 @@
             read_timeout_seconds::Float64 = 30.0,
         )
         mod = Module()
+        # The running server evaluates in `Main`, which carries the module-local
+        # `include` that `module ... end` syntax injects. A programmatic `Module()`
+        # lacks it, so inject the same definition to run `julia +rpc script.jl` the
+        # way `Main` does.
+        Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))
         mktempdir() do tmp
             registry = mktempdir()
             withenv("REPLICANT_DIR" => registry) do

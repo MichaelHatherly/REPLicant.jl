@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Run a script file with `julia +rpc path/to/script.jl [args...]`: a positional `.jl` argument is forwarded as an absolute path and run with `include`, so the script evaluates in the warm session with the real filename in stack traces, its definitions persisting like any other eval. Trailing positionals become the script's `ARGS` for the run, restored afterward so the session's `ARGS` is unchanged. A script file and `-e`/`--eval` are mutually exclusive [#40]
 - Add `julia +rpc interrupt` to free a server wedged on a running eval without killing it: the request schedules an `InterruptException` onto the running evaluation, answered off the worker queue so it reaches a busy server, leaving the session and its loaded state intact. The worker runs each eval in its own task, so the interrupt frees that eval alone and the server keeps serving. Delivery is cooperative, so a tight non-yielding loop still needs `kill`; `interrupt` is the soft recovery tier [#39]
 - Show evaluation state in `julia +rpc ls`: a `STATUS` column reads `idle`, or `busy <n>s` while the server is mid-evaluation, carried in the pong body so a wedged server is visible without a separate probe [#38]
 - Add `julia +rpc kill [--force]` to terminate a server whose worker is wedged on a non-returning eval. The target resolves from the raw registry (no ping), so a server that cannot answer its socket still resolves; `kill` sends SIGTERM, `--force` sends SIGKILL, the only signal that lands on a tight non-yielding loop. Julia cannot interrupt a running task, so killing the process is the recovery [#38]
@@ -86,3 +87,4 @@ Initial Public Release
 [#36]: https://github.com/MichaelHatherly/REPLicant.jl/issues/36
 [#38]: https://github.com/MichaelHatherly/REPLicant.jl/issues/38
 [#39]: https://github.com/MichaelHatherly/REPLicant.jl/issues/39
+[#40]: https://github.com/MichaelHatherly/REPLicant.jl/issues/40
