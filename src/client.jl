@@ -157,10 +157,14 @@ function _valued_flag(arg)
 end
 
 # Split args into a flag-to-value map and the set of bare flags present, accepting
-# both `--flag value` and `--flag=value`. Unknown arguments error.
+# both `--flag value` and `--flag=value`. A positional `.jl` path is a script to run:
+# it and every following argument (taken verbatim as the script's `ARGS`) end flag
+# parsing, mirroring `julia [opts] script.jl [args]`. Other unknown arguments error.
 function _tokenize_args(args::Vector{String})
     values = Dict{String, String}()
     bare = Set{String}()
+    file = nothing
+    script_args = String[]
     index = 1
     while index <= length(args)
         arg = args[index]
@@ -174,26 +178,36 @@ function _tokenize_args(args::Vector{String})
             end
         elseif arg in BARE_FLAGS
             push!(bare, arg)
+        elseif endswith(arg, ".jl")
+            file = arg
+            script_args = args[(index + 1):end]
+            break
         else
             error("unrecognized argument: $arg")
         end
         index += 1
     end
-    return values, bare
+    return values, bare, file, script_args
 end
 
 # Parse the client's arguments into selectors plus the per-mode flags. One parser
 # serves both paths: eval reads `code`/`timeout`, kill reads `force`. A flag for the
 # other mode is harmless: each caller reads only the fields it acts on.
 function _parse_args(args::Vector{String})
-    values, bare = _tokenize_args(args)
+    values, bare, file, script_args = _tokenize_args(args)
     port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
     timeout = haskey(values, "--timeout") ? _parse_timeout(values["--timeout"]) : nothing
+    code = get(values, "-e", get(values, "--eval", nothing))
+    isnothing(file) ||
+        isnothing(code) ||
+        error("cannot combine a script file with -e/--eval")
     return (;
         port,
         project = get(values, "--project", ""),
         name = get(values, "--name", ""),
-        code = get(values, "-e", get(values, "--eval", nothing)),
+        code,
+        file,
+        script_args,
         timeout,
         force = !isempty(bare),
     )
@@ -209,6 +223,25 @@ function _parse_timeout(value::AbstractString)
     seconds = tryparse(Float64, value)
     (isnothing(seconds) || seconds <= 0) && error("invalid --timeout: $value")
     return seconds
+end
+
+# Build the code that runs a script file in the warm session. The absolute path is
+# forwarded so the server, sharing the filesystem, reaches the file whatever its
+# cwd, and `include` runs it so stack frames carry the real filename and the
+# script's definitions persist in the session. `ARGS` holds the script's arguments
+# for the run, then is restored from task-local storage so the session's `ARGS` is
+# unchanged afterward and nothing leaks into it.
+function _script_code(file::String, script_args::Vector{String})
+    path = abspath(file)
+    isfile(path) || error("file not found: $file")
+    return """
+    task_local_storage(:replicant_saved_args, copy(ARGS))
+    empty!(ARGS); append!(ARGS, $(repr(script_args)))
+    try
+        include($(repr(path)))
+    finally
+        empty!(ARGS); append!(ARGS, task_local_storage(:replicant_saved_args))
+    end"""
 end
 
 # Write the result, terminating a non-empty payload with a newline so output does
@@ -369,8 +402,9 @@ leading `kill` terminates a resolved server (`--force` for SIGKILL); a leading
 `interrupt` frees a server wedged on a running eval, scheduling an
 `InterruptException` onto it without killing the process (`kill` stays the hard
 tier). Otherwise it resolves a target server and forwards code to it, taken from
-`-e` or, when absent, from stdin. `--timeout <seconds>` bounds the wait for a
-result. Returns a process exit code.
+`-e`, from a leading `script.jl` positional run with `include` (trailing
+positionals become the script's `ARGS`), or, when neither is given, from stdin.
+`--timeout <seconds>` bounds the wait for a result. Returns a process exit code.
 """
 function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
     try
@@ -385,7 +419,14 @@ function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
             return _interrupt_server(args[2:end]; out)
         end
         parsed = _parse_args(args)
-        code = isnothing(parsed.code) ? read(stdin, String) : parsed.code
+        file = parsed.file
+        code = if !isnothing(file)
+            _script_code(file, parsed.script_args)
+        elseif isnothing(parsed.code)
+            read(stdin, String)
+        else
+            parsed.code
+        end
         target = _resolve_port(parsed.port, parsed.project, parsed.name)
         return _send(target, code; out, err, timeout_seconds = parsed.timeout)
     catch error

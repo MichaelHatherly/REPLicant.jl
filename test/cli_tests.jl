@@ -224,3 +224,72 @@ end
         end
     end
 end
+
+@testitem "client_script_arg_parsing" tags = [:cli] begin
+    import REPLicant
+
+    bare = REPLicant._parse_args(["script.jl"])
+    @test bare.file == "script.jl"
+    @test bare.script_args == String[]
+    @test isnothing(bare.code)
+
+    withargs = REPLicant._parse_args(["script.jl", "a", "b"])
+    @test withargs.file == "script.jl"
+    @test withargs.script_args == ["a", "b"]
+
+    # Flags before the script are client flags; everything after the script is
+    # passed to it verbatim, even flag-shaped tokens.
+    mixed = REPLicant._parse_args(["--name", "n", "script.jl", "--flag", "x"])
+    @test mixed.name == "n"
+    @test mixed.file == "script.jl"
+    @test mixed.script_args == ["--flag", "x"]
+
+    # A script file and -e/--eval are mutually exclusive.
+    @test_throws Exception REPLicant._parse_args(["-e", "1", "script.jl"])
+
+    # A positional that is not a .jl path is still rejected.
+    @test_throws Exception REPLicant._parse_args(["bogus"])
+end
+
+@testitem "client_runs_script_file" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        err = IOBuffer()
+        mktempdir() do dir
+            # ARGS before any script run, to verify the restore afterward.
+            @test REPLicant.cli(["-e", "repr(ARGS)"]; out) == 0
+            before = String(take!(out))
+
+            # A script that prints, reads ARGS, and ends in a value.
+            script = joinpath(dir, "demo.jl")
+            write(script, "println(\"args: \", join(ARGS, \",\"))\n21 * 2")
+            @test REPLicant.cli([script, "X", "Y"]; out) == 0
+            @test String(take!(out)) == "args: X,Y\n42\n"
+
+            # A definition made by the script persists in the session.
+            write(script, "const FROM_SCRIPT = 7")
+            @test REPLicant.cli([script]; out) == 0
+            take!(out)
+            @test REPLicant.cli(["-e", "FROM_SCRIPT"]; out) == 0
+            @test String(take!(out)) == "7\n"
+
+            # ARGS is restored after the run, not left holding the script's args.
+            @test REPLicant.cli(["-e", "repr(ARGS)"]; out) == 0
+            @test String(take!(out)) == before
+
+            # An error in the script names the file, not REPL[N].
+            bad = joinpath(dir, "boom.jl")
+            write(bad, "error(\"kaboom\")")
+            @test REPLicant.cli([bad]; out, err) == 1
+            trace = String(take!(err))
+            @test contains(trace, "kaboom")
+            @test contains(trace, "boom.jl")
+
+            # A missing file is reported, not forwarded.
+            @test REPLicant.cli([joinpath(dir, "nope.jl")]; out, err) == 1
+            @test contains(String(take!(err)), "file not found")
+        end
+    end
+end
