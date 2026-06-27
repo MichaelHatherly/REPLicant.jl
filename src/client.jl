@@ -135,7 +135,7 @@ end
 
 # Consume the value following a flag at `index`, erroring when the flag ends the
 # argument list. Returns the value and the advanced index.
-function _take_value(args, index, flag)
+function _take_value(args::Vector{String}, index, flag)
     index += 1
     index > length(args) && error("$flag needs a value")
     return args[index], index
@@ -158,7 +158,7 @@ end
 
 # Split args into a flag-to-value map and the set of bare flags present, accepting
 # both `--flag value` and `--flag=value`. Unknown arguments error.
-function _tokenize_args(args)
+function _tokenize_args(args::Vector{String})
     values = Dict{String, String}()
     bare = Set{String}()
     index = 1
@@ -185,7 +185,7 @@ end
 # Parse the client's arguments into selectors plus the per-mode flags. One parser
 # serves both paths: eval reads `code`/`timeout`, kill reads `force`. A flag for the
 # other mode is harmless: each caller reads only the fields it acts on.
-function _parse_args(args)
+function _parse_args(args::Vector{String})
     values, bare = _tokenize_args(args)
     port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
     timeout = haskey(values, "--timeout") ? _parse_timeout(values["--timeout"]) : nothing
@@ -322,7 +322,7 @@ end
 # Terminate a target server's process. Resolves from the raw registry so a wedged
 # server still resolves, sends SIGTERM (SIGKILL with --force), and removes the
 # registry entry, since a SIGKILL skips the server's own cleanup.
-function _kill_server(args; out::IO = stdout)
+function _kill_server(args::Vector{String}; out::IO = stdout)
     parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name)
     pid = tryparse(Int, entry.pid)
@@ -342,16 +342,37 @@ function _kill_server(args; out::IO = stdout)
     return 0
 end
 
+# Free a server wedged on a running eval without killing the process. Resolves a
+# live server (the soft tier needs a healthy dispatcher to receive the request, so
+# live resolution gives a clean "no servers" error rather than a hang), schedules an
+# `InterruptException` onto the running eval, and reports the outcome.
+function _interrupt_server(args::Vector{String}; out::IO = stdout)
+    parsed = _parse_args(args)
+    target = _resolve_port(parsed.port, parsed.project, parsed.name)
+    sock = Sockets.connect(Sockets.localhost, target)
+    try
+        _write_frame(sock, REQUEST_INTERRUPT, "")
+        frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
+        isnothing(frame) && error("server closed the connection without a response")
+        println(out, "REPLicant server on port $target: $(frame.body)")
+        return 0
+    finally
+        close(sock)
+    end
+end
+
 """
     cli(args = ARGS; out = stdout, err = stderr) -> Int
 
 Forwarding client entrypoint. A leading `ls`/`list` prints the live servers; a
-leading `kill` terminates a resolved server (`--force` for SIGKILL). Otherwise it
-resolves a target server and forwards code to it, taken from `-e` or, when absent,
-from stdin. `--timeout <seconds>` bounds the wait for a result. Returns a process
-exit code.
+leading `kill` terminates a resolved server (`--force` for SIGKILL); a leading
+`interrupt` frees a server wedged on a running eval, scheduling an
+`InterruptException` onto it without killing the process (`kill` stays the hard
+tier). Otherwise it resolves a target server and forwards code to it, taken from
+`-e` or, when absent, from stdin. `--timeout <seconds>` bounds the wait for a
+result. Returns a process exit code.
 """
-function cli(args = ARGS; out::IO = stdout, err::IO = stderr)
+function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
     try
         if !isempty(args) && (args[1] == "ls" || args[1] == "list")
             _list_servers(out)
@@ -359,6 +380,9 @@ function cli(args = ARGS; out::IO = stdout, err::IO = stderr)
         end
         if !isempty(args) && args[1] == "kill"
             return _kill_server(args[2:end]; out)
+        end
+        if !isempty(args) && args[1] == "interrupt"
+            return _interrupt_server(args[2:end]; out)
         end
         parsed = _parse_args(args)
         code = isnothing(parsed.code) ? read(stdin, String) : parsed.code

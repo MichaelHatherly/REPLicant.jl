@@ -21,10 +21,12 @@ evaluates code from clients until closed.
 # Protocol
 Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
 byte, then a big-endian `UInt32` body length) followed by the body. Requests are
-`eval` (body is code) or `ping`; responses are `ok`/`err` (body is the result or
-error text) or `pong` (body is the worker's busy-since timestamp, empty when
-idle). Every frame is validated for magic, version, type, and a 16 MB length cap
-before its body is trusted.
+`eval` (body is code), `ping`, or `interrupt`; responses are `ok`/`err` (body is the
+result or error text) or `pong` (body is the worker's busy-since timestamp, empty
+when idle). An `interrupt` schedules an `InterruptException` onto the running eval (a
+no-op when idle) and is answered off the worker queue, like `ping`, so it reaches a
+wedged server. Every frame is validated for magic, version, type, and a 16 MB length
+cap before its body is trusted.
 
 # Example
 ```julia
@@ -54,6 +56,12 @@ mutable struct Server
     # When the worker is mid-evaluation, the time it started; `nothing` when idle.
     # Written only by the single worker task, read by ping responders for `ls`.
     busy_since::Union{Dates.DateTime, Nothing}
+    # Notified to request an interrupt of the eval in flight; `nothing` when idle.
+    # The dispatcher notifies it off the worker queue; a watcher pinned to the
+    # eval's thread answers, scheduling the `InterruptException` only while the eval
+    # is parked. Same-thread delivery is the only safe way to throw into a
+    # cooperatively-running task. Written by the worker, read by the dispatcher.
+    interrupt_signal::Union{Base.Event, Nothing}
 
     function Server(
             mod = nothing;
@@ -74,6 +82,7 @@ mutable struct Server
         srv.started = nothing
         srv.name = ""
         srv.busy_since = nothing
+        srv.interrupt_signal = nothing
         srv.task = errormonitor(@async _server(srv))
         # Tie the channel's lifetime to the task so a startup failure closes the
         # channel and surfaces the error to `take!` instead of blocking forever.
@@ -239,18 +248,51 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
         Threads.@spawn begin
             try
                 for request in request_queue
+                    # Run the eval in its own task so an interrupt request frees it
+                    # without unwinding the worker loop. The worker stays sequential:
+                    # it waits for each eval before taking the next, so only one eval
+                    # task, and one output capture, exists at a time. The task is
+                    # sticky (`@async`, not `Threads.@spawn`): the watcher below
+                    # schedules the interrupt from this same thread, so the eval must
+                    # stay pinned to it.
+                    eval_task = @async _revise(
+                        _handle_eval,
+                        request.socket,
+                        request.id,
+                        request.code,
+                        srv.mod,
+                        srv.verbose,
+                    )
+                    # Deliver an interrupt on the eval's own thread. Pinned there by
+                    # `@async`, the watcher runs only when the eval has yielded, so
+                    # `schedule` lands on a parked task, the only safe way to throw an
+                    # exception into a cooperatively-running task. The dispatcher
+                    # notifies `signal` off the worker queue; the `finally` notify
+                    # releases the watcher when no interrupt arrives.
+                    signal = Base.Event()
+                    watcher = @async begin
+                        wait(signal)
+                        if !istaskdone(eval_task)
+                            try
+                                schedule(eval_task, InterruptException(); error = true)
+                            catch  # dendro-ignore: empty_catch -- eval finished between the check and the schedule
+                            end
+                        end
+                    end
                     srv.busy_since = Dates.now()
+                    srv.interrupt_signal = signal
                     try
-                        _revise(
-                            _handle_eval,
-                            request.socket,
-                            request.id,
-                            request.code,
-                            srv.mod,
-                            srv.verbose,
-                        )
+                        wait(eval_task)
+                    catch error
+                        # `_handle_eval` reports eval errors to the client itself, so
+                        # a throw here is the eval task failing unexpectedly (e.g. a
+                        # Revise error). Log it and keep the worker alive.
+                        @error "Eval task failed" id = request.id error
                     finally
+                        srv.interrupt_signal = nothing
                         srv.busy_since = nothing
+                        notify(signal)
+                        wait(watcher)
                         # Always decrement counter when done with a connection
                         Threads.atomic_sub!(active_connections, 1)
                     end
@@ -304,6 +346,19 @@ end
 # render it in `ls` to tell a wedged server from an idle one.
 _busy_marker(srv::Server) = isnothing(srv.busy_since) ? "" : string(srv.busy_since)
 
+# Request an interrupt of the running eval, freeing a wedged worker without killing
+# the process. Returns whether an eval was running to interrupt. Called from the
+# dispatcher, off the worker queue, so it reaches a server whose worker is wedged.
+# Notifying the signal wakes the watcher on the eval's thread, which schedules the
+# `InterruptException`. Delivery is cooperative: a tight non-yielding loop never
+# hits a safepoint, so `kill` remains the only recourse there.
+function _interrupt_eval(srv::Server)
+    signal = srv.interrupt_signal
+    isnothing(signal) && return false
+    notify(signal)
+    return true
+end
+
 # Per-connection dispatcher. Reads one frame, answers a ping immediately so
 # liveness never queues behind an evaluation, and hands an eval to the worker.
 # Pings, framing errors, and bare disconnects release the connection here; the
@@ -320,6 +375,10 @@ function _dispatch(
         elseif frame.type == REQUEST_PING
             _write_frame(sock, RESPONSE_PONG, _busy_marker(srv))
             srv.verbose && @info "Answered ping" id
+        elseif frame.type == REQUEST_INTERRUPT
+            delivered = _interrupt_eval(srv)
+            _write_frame(sock, RESPONSE_OK, delivered ? "interrupted" : "no evaluation running")
+            srv.verbose && @info "Answered interrupt" id delivered
         else
             put!(request_queue, ClientRequest(sock, id, frame.body))
             enqueued = true
