@@ -89,6 +89,34 @@ end
     @test contains(result.output, "top-level scope")
 end
 
+@testitem "undefined_variable_backtrace_omits_internals" tags = [:error_handling] setup = [Utilities] begin
+    import REPLicant
+    # Drive the real server path: an undefined top-level binding throws before a
+    # `top-level scope` frame exists, so the backtrace must not fall back to dumping
+    # REPLicant's eval machinery to the caller.
+    Utilities.withserver() do server, mod, port
+        body = Utilities.request(port, "undefined_var")
+        @test contains(body, "UndefVarError")
+        for internal in ("_capture", "with_logstate", "evaluation.jl", "_spawn_worker", "server.jl")
+            @test !contains(body, internal)
+        end
+    end
+end
+
+@testitem "ordinary_error_keeps_user_frames" tags = [:error_handling] setup = [Utilities] begin
+    import REPLicant
+    # An error with a user frame still truncates at `top-level scope`, keeping the
+    # user's frames and no eval-entry noise below them.
+    Utilities.withserver() do server, mod, port
+        body = Utilities.request(port, "f(x) = error(\"boom\"); f(1)")
+        @test contains(body, "boom")
+        @test contains(body, "f(")
+        @test contains(body, "top-level scope")
+        @test !contains(body, "_spawn_worker")
+        @test !contains(body, "evaluation.jl")
+    end
+end
+
 @testitem "multiple_errors_in_code" tags = [:error_handling] begin
     mod = Module()
     # Only the first error should be reported

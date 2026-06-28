@@ -163,6 +163,6 @@ function label!(name::AbstractString)
     )
     _write_registry_entry(port, project; name, started)
     srv.name = name
-    @info "Labeled REPLicant server" port name
+    srv.verbose && @info "Labeled REPLicant server" port name
     return name
 end
