@@ -213,12 +213,19 @@ function _new_session(sym::Symbol)
     return mod
 end
 
+# The default session is addressed by omitting `--module`. A named session called
+# "Main" would be a distinct module (`Main.Main`) shadowing that name, so reject it
+# rather than hand back a decoy the caller mistakes for the default.
+_reject_reserved_session(name::AbstractString) =
+    name == "Main" && error("Main is the default session; omit --module to use it")
+
 # The module a request evaluates into: the default session (the server's module, or
 # `Main`) when no `--module` is given, else the named session. Called by the
 # dispatcher when a request is accepted, so the eval's module is fixed before any
 # later reset can swap it.
 function _request_module(srv::Server, name::AbstractString)
     isempty(name) && return @something(srv.mod, Base.active_module())
+    _reject_reserved_session(name)
     return _session_module(srv.sessions, name)
 end
 
@@ -234,6 +241,7 @@ end
 # name is required.
 function _reset_session(srv::Server, name::AbstractString)
     isempty(name) && error("reset needs a module name; the default session cannot be reset")
+    _reject_reserved_session(name)
     Base.@lock srv.sessions.lock srv.sessions.modules[name] = _new_session(Symbol(name))
     return "reset module $name"
 end
@@ -254,12 +262,19 @@ function _show_object(buffer, result, mod)
 end
 
 function _error_message(buffer, result, id)
-    # Clean up the backtrace to match REPL behavior. We truncate at the
-    # first "top-level scope" frame since everything above that is
-    # internal REPLicant machinery that users don't need to see.
+    # Clean up the backtrace to match REPL behavior. Truncate at the first
+    # "top-level scope" frame, since everything below is internal REPLicant
+    # machinery. An error raised while evaluating the top-level expression itself
+    # (an undefined binding) has no such frame, so fall back to the eval entry: cut
+    # just above the first `include_string` frame, which leaves no machinery, as the
+    # REPL shows for that error.
     bt = Base.scrub_repl_backtrace(result.backtrace::Vector)
-    top_level = findfirst(x -> x.func === Symbol("top-level scope"), bt)
-    bt = bt[1:something(top_level, length(bt))]
+    cut = findfirst(x -> x.func === Symbol("top-level scope"), bt)
+    if isnothing(cut)
+        entry = findfirst(x -> x.func === :include_string, bt)
+        cut = isnothing(entry) ? length(bt) : entry - 1
+    end
+    bt = bt[1:cut]
 
     print(buffer, "ERROR: ")
     # invokelatest: a user-defined exception type may have been created during

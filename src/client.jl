@@ -69,9 +69,10 @@ function _candidates_error(candidates::Vector{RegistryEntry}, message::AbstractS
     return ErrorException(String(take!(io)))
 end
 
-# Warn that no server owns the caller's location, so a server rooted at another
-# project was selected. Returns the entry so callers can `return _warn_foreign(...)`.
-# Goes to `err` so it never corrupts a result parsed from stdout.
+# Warn that the server selected by an explicit `--name` is rooted at another
+# project than the caller's location. Returns the entry so callers can
+# `return _warn_foreign(...)`. Goes to `err` so it never corrupts a result parsed
+# from stdout.
 function _warn_foreign(err::IO, entry::RegistryEntry, target::AbstractString)
     println(err, "replicant: no server for $target; falling back to the server in $(entry.project)")
     return entry
@@ -116,11 +117,16 @@ function _select_entry(
         length(named) == 1 && return _warn_foreign(err, named[1], target)
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
-    elseif length(candidates) == 1
-        return _warn_foreign(err, candidates[1], target)
     end
 
-    throw(_candidates_error(candidates, "could not pick a server for $target"))
+    # No server owns the caller's location and no explicit selector was given.
+    # Refuse rather than silently evaluating against an unrelated project; an
+    # explicit --port/--project/--name targets a foreign server on purpose.
+    throw(
+        _candidates_error(
+            candidates, "no server owns $target; select one with --port/--project/--name",
+        ),
+    )
 end
 
 # Resolve an eval target to a port: an explicit port wins and connects directly;
@@ -128,7 +134,10 @@ end
 function _resolve_port(
         port::Integer, project::AbstractString, name::AbstractString; err::IO = stderr,
     )
-    port > 0 && return port
+    if port > 0
+        _ping(port) || error("no REPLicant server responding on port $port")
+        return port
+    end
     return _select_entry(_live_entries(), project, name; err).port
 end
 
@@ -198,7 +207,7 @@ function _tokenize_args(args::Vector{String})
             script_args = args[(index + 1):end]
             break
         else
-            error("unrecognized argument: $arg")
+            error("unrecognized argument: $arg; run `julia +rpc help` for usage")
         end
         index += 1
     end
@@ -493,6 +502,10 @@ function _reset_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
         _write_frame(sock, REQUEST_RESET, parsed.mod)
         frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
         isnothing(frame) && error("server closed the connection without a response")
+        if frame.type == RESPONSE_ERR
+            println(err, "replicant: $(frame.body)")
+            return 1
+        end
         println(out, "REPLicant server on port $target: $(frame.body)")
         return 0
     finally
@@ -500,23 +513,52 @@ function _reset_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     end
 end
 
+# Poll a server until it reports idle, or the budget elapses. Pings are answered
+# off the worker queue, so a busy worker still pongs (an empty marker means idle).
+# Returns whether the server reached idle.
+function _await_idle(port::Integer; timeout = 2.0)
+    deadline = time() + timeout
+    while time() < deadline
+        _ping_status(port) == "" && return true
+        sleep(0.05)
+    end
+    return false
+end
+
 # Free a server wedged on a running eval without killing the process. Resolves a
 # live server (the soft tier needs a healthy dispatcher to receive the request, so
 # live resolution gives a clean "no servers" error rather than a hang), schedules an
-# `InterruptException` onto the running eval, and reports the outcome.
-function _interrupt_server(args::Vector{String}; out::IO = stdout)
+# `InterruptException` onto the running eval, then confirms it stopped. The signal
+# lands only when the eval yields, so a tight non-yielding loop stays busy: report
+# that and point at `kill --force` rather than claim a success that did not happen.
+function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     target = _resolve_port(parsed.port, parsed.project, parsed.name)
     sock = Sockets.connect(Sockets.localhost, target)
-    try
+    body = try
         _write_frame(sock, REQUEST_INTERRUPT, "")
         frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
         isnothing(frame) && error("server closed the connection without a response")
-        println(out, "REPLicant server on port $target: $(frame.body)")
-        return 0
+        frame.body
     finally
         close(sock)
     end
+
+    if body != "interrupted"
+        # Nothing was running (e.g. "no evaluation running"); report it as-is.
+        println(out, "REPLicant server on port $target: $body")
+        return 0
+    end
+    if _await_idle(target)
+        println(out, "REPLicant server on port $target: interrupted, now idle")
+        return 0
+    end
+    println(
+        err,
+        "replicant: interrupt sent to the server on port $target, but the eval is still \
+        running (not yielding); stop it with: julia +rpc kill --force",
+    )
+    return 1
 end
 
 """
@@ -534,16 +576,51 @@ or, when neither is given, from stdin. The eval runs in the caller's directory
 (override with `--dir`) and in the default session unless `--module <name>` selects
 one. `--timeout <seconds>` bounds the wait for a result. Returns a process exit code.
 """
-# Run a leading subcommand (`ls`/`start`/`kill`/`interrupt`/`reset`) and return its
-# exit code, or `nothing` when `args` does not start with one, so `cli` falls
-# through to evaluation.
+# Usage text for `help`/`--help`/`-h`, listing the subcommands, selectors, and the
+# per-mode flags so an agent can discover the surface without reading the skill.
+const USAGE = """
+julia +rpc — forward Julia code to a warm REPLicant server
+
+Usage:
+  julia +rpc [selectors] -e <code>     evaluate code (also via heredoc/stdin, or a script.jl)
+  julia +rpc ls                        list live servers
+  julia +rpc start [start-options]     start a detached server
+  julia +rpc kill [selectors] [-f]     stop a server (-f/--force sends SIGKILL)
+  julia +rpc interrupt [selectors]     free a server wedged on a running eval
+  julia +rpc reset --module <name>     clear a named session
+  julia +rpc help                      show this message
+
+Selectors:
+  --port <n>         target a specific port
+  --name <label>     target a labeled server
+  --project <path>   select by project root (default: current directory)
+
+Eval options:
+  -e, --eval <code>  code to run (else read stdin, or run a positional script.jl)
+  --dir <path>       working directory for the eval (default: caller's cwd)
+  --module <name>    evaluate into a named session, isolated from the default
+  --timeout <secs>   bound the wait for a result
+
+Start options:
+  --dir <path>       directory to serve (default: current directory)
+  --project <path>   Julia environment to activate (default: the project of --dir)
+  --name <label>     label the server
+  --channel <ver>    juliaup channel to run the server on (default: your default)
+"""
+
+_usage(out::IO) = (print(out, USAGE); 0)
+
+# Run a leading subcommand (`ls`/`start`/`kill`/`interrupt`/`reset`/`help`) and
+# return its exit code, or `nothing` when `args` does not start with one, so `cli`
+# falls through to evaluation.
 function _run_subcommand(args::Vector{String}, out::IO, err::IO)
     isempty(args) && return nothing
     command, rest = args[1], args[2:end]
+    command in ("help", "--help", "-h") && return _usage(out)
     command in ("ls", "list") && return (_list_servers(out); 0)
     command == "start" && return _start_server(rest; out)
     command == "kill" && return _kill_server(rest; out)
-    command == "interrupt" && return _interrupt_server(rest; out)
+    command == "interrupt" && return _interrupt_server(rest; out, err)
     command == "reset" && return _reset_server(rest; out, err)
     return nothing
 end

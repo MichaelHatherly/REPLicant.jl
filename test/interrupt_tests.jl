@@ -61,6 +61,30 @@ end
     end
 end
 
+@testitem "await_idle_reflects_busy_state" tags = [:interrupt] setup = [Utilities] begin
+    import REPLicant
+
+    # `_interrupt_server` only claims success once the server is idle again. Whether
+    # a scheduled interrupt actually frees a wedged eval is environment-dependent
+    # (thread count, safepoint placement), so test the idle check itself: it must
+    # report not-idle while the worker is busy, which is what turns a stuck eval into
+    # the kill-force message instead of false success.
+    Utilities.withserver() do server, mod, port
+        @test REPLicant._await_idle(port; timeout = 0.5)
+
+        busy = @async Utilities.request(port, "sleep(5)")
+        deadline = time() + 5
+        while isempty(something(REPLicant._ping_status(port), "")) && time() < deadline
+            sleep(0.05)
+        end
+        @test !REPLicant._await_idle(port; timeout = 1.0)
+
+        # `sleep` yields, so the interrupt frees it; drain the held request.
+        @test REPLicant._interrupt_server(["--port=$port"]; out = IOBuffer()) == 0
+        wait(busy)
+    end
+end
+
 @testitem "interrupt_does_not_kill_process" tags = [:interrupt, :kill] setup = [Utilities] begin
     import REPLicant
     import Sockets

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Print usage with `julia +rpc help` (also `--help` and `-h`), listing the subcommands, selectors, and per-mode flags so the surface is discoverable without the skill docs. An unrecognized argument now points at it [#42]
 - Start a server from the client with `julia +rpc start`: it launches a detached process that outlives the client and prints the port once registered, so an agent with no interactive REPL can bring up a warm session. `--dir` roots it at a directory (default the caller's), `--project` picks the environment to activate, `--name` labels it, `--channel` runs a chosen juliaup channel (default the launcher's default version). The server loads `startup.jl` like a normal warm session. Stop it with `julia +rpc kill` [#41]
 - Add named sessions with `--module <name>`: the eval runs in a standalone module instead of the shared default, isolating its state from `Main` and from other named sessions. State persists across calls under the same name, so a distinct name per task keeps `Main` clean [#41]
 - Add `julia +rpc reset --module <name>` to swap a named session for a fresh, empty module, giving a clean slate without restarting the process. The default session is the process's `Main` and cannot be reset, so `--module` is required [#41]
@@ -24,8 +25,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Reject `--module Main`: the default session is addressed by omitting `--module`, so a session named `Main` would be a distinct module shadowing that name. Eval and `reset` both error with that guidance instead of handing back a decoy [#42]
 - Run each eval in the caller's working directory: the client sends its directory with the request, so relative paths resolve where `julia +rpc` was invoked rather than where the server started, and a `cd` inside an eval no longer leaks to the next. Override with `--dir <path>` [#41]
-- Warn on stderr when no server owns the caller's directory and a server from another project is used, so a cross-project eval is visible instead of silent. The call still runs [#41]
+- Refuse to evaluate when no server owns the caller's directory and no explicit selector is given, listing the candidates instead of silently running against another project's server. Target a foreign server on purpose with `--port`, `--project`, or `--name` [#41][#42]
 - Carry the working directory and target module in the eval frame, bumping the protocol version to 2. A client and server on mismatched versions read as incompatible and prompt to reinstall the rpc channel [#41]
 - Point the `--timeout` expiry message at `julia +rpc interrupt` as the soft recovery before `kill` [#41]
 - Route evaluation output per task instead of redirecting the process streams: a remote eval captures only its own output while the interactive server's REPL keeps writing to the terminal, so the two no longer steal each other's output [#36]
@@ -34,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Scrub REPLicant's own eval frames from the backtrace of an error raised before any user frame (an undefined top-level binding), which previously dumped the server's internal machinery to the caller. The backtrace now matches the REPL [#42]
+- Report `julia +rpc interrupt` honestly: after scheduling the interrupt, the client confirms the server returned to idle before claiming success, and points at `kill --force` when a non-yielding eval keeps running, instead of always reporting `interrupted` [#42]
+- Give a clear error when `--port` targets a port with no live server, instead of leaking a raw connection-refused `IOError` [#42]
+- Quiet the `Labeled REPLicant server` log unless the server is started verbose [#42]
 - Stop discarding the result of an eval that runs longer than 30 seconds: the client read no longer applies the request timeout to the response, so a long compute returns instead of erroring [#38]
 - Answer liveness pings off the worker queue and time the probe out quickly, so `ls` and server resolution stay responsive while a server is mid-evaluation instead of waiting on the request timeout [#35]
 - Point protocol magic and version mismatch errors at reinstalling the rpc channel, since the usual cause is a client and server on different REPLicant versions [#35]
@@ -96,3 +102,4 @@ Initial Public Release
 [#39]: https://github.com/MichaelHatherly/REPLicant.jl/issues/39
 [#40]: https://github.com/MichaelHatherly/REPLicant.jl/issues/40
 [#41]: https://github.com/MichaelHatherly/REPLicant.jl/issues/41
+[#42]: https://github.com/MichaelHatherly/REPLicant.jl/issues/42

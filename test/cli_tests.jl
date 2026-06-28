@@ -24,6 +24,50 @@
     @test_throws Exception REPLicant._parse_args(["--bogus"])
 end
 
+@testitem "help_prints_usage" tags = [:cli] begin
+    import REPLicant
+
+    for arg in (["help"], ["--help"], ["-h"])
+        out = IOBuffer()
+        err = IOBuffer()
+        @test REPLicant.cli(arg; out, err) == 0
+        text = String(take!(out))
+        for sub in ("ls", "start", "kill", "interrupt", "reset")
+            @test contains(text, sub)
+        end
+        @test contains(text, "--port")
+        @test contains(text, "--module")
+    end
+end
+
+@testitem "unknown_argument_hints_help" tags = [:cli] begin
+    import REPLicant
+
+    out = IOBuffer()
+    err = IOBuffer()
+    @test REPLicant.cli(["--bogus"]; out, err) == 1
+    @test contains(String(take!(err)), "julia +rpc help")
+end
+
+@testitem "explicit_dead_port_reports_clearly" tags = [:cli] begin
+    import REPLicant
+    import Sockets
+
+    # An OS-assigned port, released at once, so nothing listens there. A direct
+    # `--port` to a dead server must report clearly, not leak a raw socket IOError.
+    probe = Sockets.listen(Sockets.localhost, 0)
+    deadport = Int(Sockets.getsockname(probe)[2])
+    close(probe)
+
+    out = IOBuffer()
+    err = IOBuffer()
+    @test REPLicant.cli(["--port", string(deadport), "-e", "1 + 1"]; out, err) == 1
+    @test contains(
+        String(take!(err)),
+        "no REPLicant server responding on port $deadport",
+    )
+end
+
 @testitem "client_timeout_parsing" tags = [:cli] begin
     import REPLicant
 
@@ -329,31 +373,71 @@ end
     end
 end
 
-@testitem "select_entry_warns_cross_project" tags = [:cli] begin
-    import REPLicant
-
-    # A server rooted at one project, a caller in an unrelated one: the lone server
-    # is still chosen, with a warning that names the foreign project.
-    entries = [REPLicant.RegistryEntry(9001, "/some/project/a", "", "1.12", "111", "t")]
-    err = IOBuffer()
-    chosen = REPLicant._select_entry(entries, "/different/place", ""; err)
-    @test chosen.port == 9001
-    message = String(take!(err))
-    @test contains(message, "no server for")
-    @test contains(message, "/some/project/a")
-end
-
-@testitem "client_cross_project_warns_through_cli" tags = [:cli] setup = [Utilities] begin
+@testitem "rejects_Main_as_session_name" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
     Utilities.withserver() do server, mod, port
+        # `--module Main` would create a `Main.Main` decoy distinct from the default
+        # session, so eval into it is rejected with exit 1.
         out = IOBuffer()
         err = IOBuffer()
-        # Resolve from a directory the lone server does not own: the eval still runs,
-        # the warning goes to stderr, and stdout carries only the result.
-        @test REPLicant.cli(["--project=/no/such/project", "-e", "6 * 7"]; out, err) == 0
-        @test strip(String(take!(out))) == "42"
-        @test contains(String(take!(err)), "no server for")
+        @test REPLicant.cli(["--port=$port", "--module=Main", "-e", "1 + 1"]; out, err) == 1
+        @test contains(String(take!(err)), "Main is the default session")
+
+        # `reset --module Main` is rejected the same way.
+        out2 = IOBuffer()
+        err2 = IOBuffer()
+        @test REPLicant.cli(["reset", "--port=$port", "--module=Main"]; out = out2, err = err2) == 1
+        @test contains(String(take!(err2)), "Main is the default session")
+
+        # A non-reserved name still isolates state and resets cleanly.
+        @test REPLicant.cli(["--port=$port", "--module=work", "-e", "z = 7"]; out = IOBuffer()) == 0
+        got = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=work", "-e", "z"]; out = got, err = IOBuffer()) == 0
+        @test strip(String(take!(got))) == "7"
+        @test REPLicant.cli(["reset", "--port=$port", "--module=work"]; out = IOBuffer()) == 0
+    end
+end
+
+@testitem "select_entry_refuses_cross_project" tags = [:cli] begin
+    import REPLicant
+
+    # A server rooted at one project, a caller in an unrelated one with no explicit
+    # selector: refuse and list the candidate rather than silently choosing it.
+    entries = [REPLicant.RegistryEntry(9001, "/some/project/a", "", "1.12", "111", "t")]
+    err = IOBuffer()
+    ex = try
+        REPLicant._select_entry(entries, "/different/place", ""; err)
+        nothing
+    catch e
+        e
+    end
+    @test ex isa Exception
+    message = sprint(showerror, ex)
+    @test contains(message, "no server owns")
+    @test contains(message, "9001")
+end
+
+@testitem "client_cross_project_refuses_through_cli" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        # From a directory the lone server does not own, with no explicit selector:
+        # refuse, list candidates, and write nothing to stdout.
+        out = IOBuffer()
+        err = IOBuffer()
+        @test REPLicant.cli(["--project=/no/such/project", "-e", "6 * 7"]; out, err) == 1
+        @test isempty(String(take!(out)))
+        message = String(take!(err))
+        @test contains(message, "no server owns")
+        @test contains(message, string(port))
+
+        # An explicit --port targets a foreign server on purpose and still resolves.
+        out2 = IOBuffer()
+        @test REPLicant.cli(
+            ["--project=/no/such/project", "--port=$port", "-e", "6 * 7"]; out = out2,
+        ) == 0
+        @test strip(String(take!(out2))) == "42"
     end
 end
 
