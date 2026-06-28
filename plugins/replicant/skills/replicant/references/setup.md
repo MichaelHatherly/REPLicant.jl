@@ -31,6 +31,14 @@ resolves `using REPLicant` from there.
 
    Open an interactive `julia` inside a project and it serves that project.
 
+   An agent with no interactive REPL starts one directly instead:
+
+   ```bash
+   julia +rpc start            # serve the current project, detached
+   ```
+
+   See `references/servers.md` for `start` flags and stopping a server.
+
 3. Link the `rpc` juliaup channel once after installing:
 
    ```bash
@@ -56,9 +64,8 @@ project. A channel error means the link is missing: rerun step 3.
 ## Troubleshooting
 
 - **`julia +rpc` reports no server / connection refused.** No server is running
-  for this project. Open an interactive `julia` in the project (startup.jl starts
-  one), or start one by hand (see `references/servers.md`). Confirm with `julia
-  +rpc ls`.
+  for this project. Run `julia +rpc start` (or open an interactive `julia`, which
+  startup.jl serves). Confirm with `julia +rpc ls`.
 - **`julia +rpc` is not a known channel, or runs the wrong target.** The channel
   is not linked, or points elsewhere. Link it (use `force = true` to overwrite a
   non-REPLicant target):

@@ -26,6 +26,33 @@
     @test frame.body == "\"π🚀\""
 end
 
+@testitem "eval_body_roundtrip" tags = [:protocol, :frame] begin
+    import REPLicant
+
+    # Full round trip with a multibyte path, a module name, and code carrying
+    # newlines: byte-length framing must reproduce each field exactly.
+    body = REPLicant._encode_eval_body(; cwd = "/tmp/π", mod = "Session", code = "f(x)\n  x + 1\nend")
+    decoded = REPLicant._decode_eval_body(body)
+    @test decoded.cwd == "/tmp/π"
+    @test decoded.mod == "Session"
+    @test decoded.code == "f(x)\n  x + 1\nend"
+
+    # Empty fields are the common case: no cwd, no module, just code.
+    decoded = REPLicant._decode_eval_body(REPLicant._encode_eval_body(; cwd = "", mod = "", code = "1 + 1"))
+    @test decoded.cwd == ""
+    @test decoded.mod == ""
+    @test decoded.code == "1 + 1"
+
+    # Code containing the field delimiter byte stays intact past the two headers.
+    decoded = REPLicant._decode_eval_body(REPLicant._encode_eval_body(; cwd = "", mod = "", code = "a\n2\nb"))
+    @test decoded.code == "a\n2\nb"
+end
+
+@testitem "protocol_version_is_two" tags = [:protocol, :frame] begin
+    import REPLicant
+    @test REPLicant.PROTOCOL_VERSION == 0x02
+end
+
 @testitem "frame_bare_disconnect_is_nothing" tags = [:protocol, :frame] begin
     import REPLicant
     # An empty stream (peer closed without sending) reads as `nothing`, not an error.

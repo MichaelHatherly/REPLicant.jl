@@ -24,8 +24,12 @@
         # of unknown type. The `kill`, `--timeout`, and `interrupt` paths add
         # socket-IO and `println`-over-`IO` reports in the same category; running
         # each eval in its own `@async` task, with a watcher that schedules the
-        # interrupt, adds a few more. Threading stays inferrable: opt is 0.
-        SOUND_LIMIT = 304   # JET.report_package(REPLicant; mode = :sound)
+        # interrupt, adds a few more. The eval frame's `cwd`/module fields
+        # (`_encode_eval_body` over `AbstractString`), named sessions (`Core.eval`
+        # building a module under the session lock), and the `reset` and `start`
+        # subcommands (subprocess `run`/`Cmd` and more keyword-NamedTuple `getfield`
+        # over `out`/`err`) account for the rest. Threading stays inferrable: opt is 0.
+        SOUND_LIMIT = 390   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

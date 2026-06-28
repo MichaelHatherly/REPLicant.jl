@@ -160,10 +160,18 @@ end
 # Evaluate `code` and format the result REPL-style, returning the rendered text
 # and whether evaluation (or formatting) errored. The `errored` flag drives the
 # response frame's type so the client can route failures and set its exit code.
-function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
-    # Use the active module to maintain state between evaluations.
-    # This allows users to define variables and use them in subsequent calls.
-    mod = @something(mod, Base.active_module())
+# `dir` is the caller's working directory (empty keeps the server's cwd); `mod_name`
+# names a session submodule (empty evaluates into the default module).
+function _evaluate(
+        code::AbstractString, id::Integer, srv_mod::Union{Module, Nothing},
+        dir::AbstractString, mod_name::AbstractString,
+        sessions::SessionStore = SessionStore(),
+    )
+    # The default module maintains state between evaluations: bindings defined in
+    # one call are visible in the next. A named session evaluates into a standalone
+    # module instead, isolating its state without polluting the default.
+    mod = isempty(mod_name) ? @something(srv_mod, Base.active_module()) :
+        _session_module(sessions, mod_name)
     if _is_help_query(code)
         query = chop(lstrip(code); head = 1, tail = 0)  # drop one leading `?`
         return _help(query, mod)
@@ -172,8 +180,11 @@ function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing
         thunk = () -> include_string(mod, code, "REPL[$id]")
         # Capture stdout, stderr, logging, and the return value, giving us
         # REPL-like behavior. InterruptException is rethrown to allow
-        # graceful interruption of long-running code.
-        result = _capture(thunk)
+        # graceful interruption of long-running code. Run in the caller's directory
+        # when given so relative paths resolve there; `cd` restores the previous
+        # directory on return or throw, so a `cd` inside the eval never leaks. Safe
+        # because the worker is sequential.
+        result = isempty(dir) ? _capture(thunk) : cd(() -> _capture(thunk), dir)
 
         buffer = IOBuffer()
         # Stdout output comes first, just like in the REPL
@@ -195,6 +206,36 @@ function _evaluate(code::AbstractString, id::Integer, mod::Union{Module, Nothing
         @error "Error evaluating code" id code error
         return (; output = "ERROR: $(error)", errored = true)
     end
+end
+
+# Named sessions are kept in the server's `SessionStore`, each a standalone module
+# reused across calls. Storing them there (rather than as bindings in the eval
+# module) keeps `Main` clean and sidesteps the binding-partition rules that make a
+# redefined module binding unreliable; reset is a plain Dict write, visible at once.
+
+# Build a fresh session module named `sym`. `Module` carries the standard `Base`
+# imports; wire `include` to the module itself, the way a `module ... end` block
+# would, so script files and `include` run inside it.
+function _new_session(sym::Symbol)
+    mod = Module(sym)
+    Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))
+    return mod
+end
+
+# Resolve a named session module, creating it on first use. State defined in one
+# call is visible in the next under the same name.
+function _session_module(sessions::SessionStore, name::AbstractString)
+    return Base.@lock sessions.lock get!(() -> _new_session(Symbol(name)), sessions.modules, name)
+end
+
+# Replace the named session with a fresh, empty module, giving a clean slate
+# without restarting the process. The old module is unreferenced and gets
+# collected. The default session is the process's `Main` and cannot be reset, so a
+# name is required.
+function _reset_session(srv::Server, name::AbstractString)
+    isempty(name) && error("reset needs a module name; the default session cannot be reset")
+    Base.@lock srv.sessions.lock srv.sessions.modules[name] = _new_session(Symbol(name))
+    return "reset module $name"
 end
 
 _echo_object(object) = true
@@ -308,10 +349,13 @@ __notify_busy(::Any) = nothing
 
 # Evaluate a remote request while signaling the prompt that work is in flight.
 # Pings never reach here, so the indicator reflects only real evaluations.
-function _evaluate_request(code::AbstractString, id::Integer, mod::Union{Module, Nothing})
+function _evaluate_request(
+        code::AbstractString, id::Integer, mod::Union{Module, Nothing},
+        dir::AbstractString, mod_name::AbstractString, sessions::SessionStore,
+    )
     _notify_busy(1)
     return try
-        _evaluate(code, id, mod)
+        _evaluate(code, id, mod, dir, mod_name, sessions)
     finally
         _notify_busy(-1)
     end

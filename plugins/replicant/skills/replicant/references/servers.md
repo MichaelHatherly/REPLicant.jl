@@ -28,6 +28,38 @@ julia +rpc --name=main -e '21 * 2'
 Several servers can run in one project; each label is unique among live servers
 there. An agent reaching a server by `--port` can label it the same way.
 
+## Start a server
+
+`julia +rpc start` launches a server in a detached process that outlives the
+client, then prints its port once it has registered:
+
+```bash
+julia +rpc start                       # serve the current directory's project
+julia +rpc start --dir /path/to/proj   # serve another directory
+julia +rpc start --project /env --name api   # pick the env, label it
+```
+
+`--dir` sets the working directory and the project the server is rooted at
+(default: the caller's directory). `--project` sets the Julia environment to
+activate (default: the project of `--dir`). `--name` labels the server. Stop it
+later with `julia +rpc kill`.
+
+A server is pinned to one environment for its life. To work in a different
+environment, `start` another server for it; the selection cascade routes each
+`julia +rpc` call to the server owning its directory.
+
+## Reset a session
+
+`julia +rpc reset --module <name>` swaps a named session for a fresh, empty module,
+giving a clean slate without losing the warm process:
+
+```bash
+julia +rpc reset --module build
+```
+
+The default session is the process's `Main` and cannot be reset, so `--module` is
+required. See `evaluate.md` for named sessions.
+
 ## Inspect a server
 
 When a server was started with `save = true` (as the recommended startup.jl
