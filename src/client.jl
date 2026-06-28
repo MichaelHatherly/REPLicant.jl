@@ -495,24 +495,25 @@ or, when neither is given, from stdin. The eval runs in the caller's directory
 (override with `--dir`) and in the default session unless `--module <name>` selects
 one. `--timeout <seconds>` bounds the wait for a result. Returns a process exit code.
 """
+# Run a leading subcommand (`ls`/`start`/`kill`/`interrupt`/`reset`) and return its
+# exit code, or `nothing` when `args` does not start with one, so `cli` falls
+# through to evaluation.
+function _run_subcommand(args::Vector{String}, out::IO, err::IO)
+    isempty(args) && return nothing
+    command, rest = args[1], args[2:end]
+    command in ("ls", "list") && return (_list_servers(out); 0)
+    command == "start" && return _start_server(rest; out)
+    command == "kill" && return _kill_server(rest; out)
+    command == "interrupt" && return _interrupt_server(rest; out)
+    command == "reset" && return _reset_server(rest; out, err)
+    return nothing
+end
+
 function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
     try
-        if !isempty(args) && (args[1] == "ls" || args[1] == "list")
-            _list_servers(out)
-            return 0
-        end
-        if !isempty(args) && args[1] == "start"
-            return _start_server(args[2:end]; out)
-        end
-        if !isempty(args) && args[1] == "kill"
-            return _kill_server(args[2:end]; out)
-        end
-        if !isempty(args) && args[1] == "interrupt"
-            return _interrupt_server(args[2:end]; out)
-        end
-        if !isempty(args) && args[1] == "reset"
-            return _reset_server(args[2:end]; out, err)
-        end
+        handled = _run_subcommand(args, out, err)
+        isnothing(handled) || return handled
+
         parsed = _parse_args(args)
         file = parsed.file
         code = if !isnothing(file)

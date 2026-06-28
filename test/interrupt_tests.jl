@@ -69,10 +69,15 @@ end
         registry = mktempdir()
         withenv("REPLICANT_DIR" => registry) do
             Utilities.spawn_server(registry, work) do port, pid
-                # Wedge the worker on a yielding non-returning eval.
+                # Wedge the worker on a yielding non-returning eval, then wait until
+                # the server reports busy so the interrupt lands on a running eval
+                # rather than racing a worker that has not picked it up yet.
                 wedged = Sockets.connect(Sockets.localhost, port)
                 Utilities.sendframe(wedged, "while true; sleep(0.01); end")
-                sleep(0.5)
+                deadline = time() + 30
+                while isempty(something(REPLicant._ping_status(port), "")) && time() < deadline
+                    sleep(0.05)
+                end
 
                 out = IOBuffer()
                 @test REPLicant._interrupt_server(["--port=$port"]; out) == 0

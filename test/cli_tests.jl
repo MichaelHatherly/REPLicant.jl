@@ -276,12 +276,13 @@ end
             @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "isfile(\"marker.txt\")"]; out) == 0
             @test strip(String(take!(out))) == "true"
 
-            # A `cd` inside one eval does not leak into the next: each eval runs in
-            # --dir afresh.
+            # A `cd` inside one eval does not leak into the next: the following eval
+            # still resolves the relative path against --dir. Checked via the marker
+            # file rather than `pwd()` to avoid Windows short/long path mismatches.
             @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "cd(\"..\"); 1"]; out) == 0
             take!(out)
-            @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "pwd()"]; out) == 0
-            @test contains(String(take!(out)), realpath(dir))
+            @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "isfile(\"marker.txt\")"]; out) == 0
+            @test strip(String(take!(out))) == "true"
         end
     end
 end
