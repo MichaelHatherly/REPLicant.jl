@@ -155,8 +155,10 @@ end
 
 # Flags that carry a value, as `--flag value` or `--flag=value`. `-e`/`--eval` are
 # aliases for the code to run.
-const VALUED_FLAGS =
-    ("--port", "--project", "--name", "--timeout", "--dir", "--module", "-e", "--eval")
+const VALUED_FLAGS = (
+    "--port", "--project", "--name", "--timeout", "--dir", "--module", "--channel",
+    "-e", "--eval",
+)
 # Flags that stand alone. `-f` is an alias for `--force`.
 const BARE_FLAGS = ("--force", "-f")
 
@@ -220,6 +222,7 @@ function _parse_args(args::Vector{String})
         name = get(values, "--name", ""),
         dir = get(values, "--dir", ""),
         mod = get(values, "--module", ""),
+        channel = get(values, "--channel", ""),
         code,
         file,
         script_args,
@@ -391,10 +394,18 @@ function _kill_server(args::Vector{String}; out::IO = stdout)
     return 0
 end
 
+# The Julia launcher for a started server: `julia` on PATH (the default channel), or
+# `julia +<channel>` for a specific version. Using the launcher rather than
+# `Base.julia_cmd()` keeps the client's own flags (its `--startup-file=no`, sysimage,
+# optimization) from forwarding, so the server runs the channel's normal defaults.
+# The `rpc` channel already requires juliaup, so `julia` on PATH is its launcher.
+_server_julia(channel::AbstractString) = isempty(channel) ? `julia` : `julia +$channel`
+
 # Start a server in a detached Julia process so it outlives this client. Roots it
 # at `--dir` (default the caller's directory) and `--project` (default `@.`, the
-# project of that directory), optionally labels it with `--name`, then waits for it
-# to register before reporting the port. Stop it later with `julia +rpc kill`.
+# project of that directory), runs on `--channel` (default the launcher's default
+# version), optionally labels it with `--name`, then waits for it to register before
+# reporting the port. Stop it later with `julia +rpc kill`.
 function _start_server(args::Vector{String}; out::IO = stdout)
     parsed = _parse_args(args)
     dir = isempty(parsed.dir) ? pwd() : abspath(parsed.dir)
@@ -419,10 +430,12 @@ function _start_server(args::Vector{String}; out::IO = stdout)
 
     # Capture the detached server's stderr so a startup failure (REPLicant missing,
     # a precompile error) surfaces in the error instead of vanishing into devnull.
-    # The server keeps logging there for its lifetime, like any daemon's log.
+    # The server keeps logging there for its lifetime, like any daemon's log. No
+    # `--startup-file=no`: the server is a warm session, so it loads the user's
+    # startup.jl (Revise and other REPL setup), unlike a one-off client eval.
     log = tempname()
     command = Cmd(
-        `$(Base.julia_cmd()) --project=$project --startup-file=no -e $script`;
+        `$(_server_julia(parsed.channel)) --project=$project -e $script`;
         detach = true,
         dir,
     )
@@ -501,7 +514,7 @@ end
     cli(args = ARGS; out = stdout, err = stderr) -> Int
 
 Forwarding client entrypoint. A leading `ls`/`list` prints the live servers; a
-leading `start` launches a detached server (`--dir`/`--project`/`--name`); a
+leading `start` launches a detached server (`--dir`/`--project`/`--name`/`--channel`); a
 leading `kill` terminates a resolved server (`--force` for SIGKILL); a leading
 `interrupt` frees a server wedged on a running eval, scheduling an
 `InterruptException` onto it without killing the process (`kill` stays the hard

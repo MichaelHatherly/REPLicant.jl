@@ -37,6 +37,7 @@ client, then prints its port once it has registered:
 julia +rpc start                       # serve the current directory's project
 julia +rpc start --dir /path/to/proj   # serve another directory
 julia +rpc start --project /env --name api   # pick the env, label it
+julia +rpc start --channel 1.10        # run a different Julia version
 ```
 
 `--dir` sets the working directory; the server is rooted at the enclosing project
@@ -44,6 +45,14 @@ julia +rpc start --project /env --name api   # pick the env, label it
 it (default: the caller's directory). `--project` sets the Julia environment to
 activate (default: the project of `--dir`). `--name` labels the server. Stop it
 later with `julia +rpc kill`.
+
+`--channel <name>` runs the server on a different juliaup channel (default: your
+default channel). The channel must be installed (`juliaup add <name>`) and its global
+environment must have REPLicant of a matching version, or the client reads the server
+as a version-skew peer.
+
+A `start`ed server loads your `startup.jl`, so Revise and other warm-session setup
+apply. A one-off `julia +rpc` eval does not.
 
 A server is pinned to one environment for its life. To work in a different
 environment, `start` another server for it; the selection cascade routes each

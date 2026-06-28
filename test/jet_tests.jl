@@ -26,10 +26,10 @@
         # each eval in its own `@async` task, with a watcher that schedules the
         # interrupt, adds a few more. The eval frame's `cwd`/module fields, named
         # sessions (`Core.eval` building a module under the session lock), and the
-        # `reset` and `start` subcommands (subprocess `run`/`Cmd` and more
-        # keyword-NamedTuple `getfield` over `out`/`err`) account for the rest.
-        # Threading stays inferrable: opt is 0.
-        SOUND_LIMIT = 366   # JET.report_package(REPLicant; mode = :sound)
+        # `reset` and `start` subcommands (subprocess `run`/`Cmd`, the `--channel`
+        # launcher, and more keyword-NamedTuple `getfield` over `out`/`err`) account
+        # for the rest. Threading stays inferrable: opt is 0.
+        SOUND_LIMIT = 367   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

@@ -357,6 +357,19 @@ end
     end
 end
 
+@testitem "client_channel_launcher" tags = [:cli] begin
+    import REPLicant
+
+    # `--channel` parses (as `_start_server` sees it, after `start` is stripped),
+    # defaulting to empty.
+    @test REPLicant._parse_args(["--channel=1.10"]).channel == "1.10"
+    @test REPLicant._parse_args(String[]).channel == ""
+
+    # The launcher is `julia` on PATH by default, or `julia +<channel>` for a version.
+    @test REPLicant._server_julia("") == `julia`
+    @test REPLicant._server_julia("1.10") == `julia +1.10`
+end
+
 @testitem "client_start_spawns_detached_server" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
