@@ -39,8 +39,9 @@ julia +rpc start --dir /path/to/proj   # serve another directory
 julia +rpc start --project /env --name api   # pick the env, label it
 ```
 
-`--dir` sets the working directory and the project the server is rooted at
-(default: the caller's directory). `--project` sets the Julia environment to
+`--dir` sets the working directory; the server is rooted at the enclosing project
+(the git top-level of `--dir`, else `--dir` itself), which is how clients discover
+it (default: the caller's directory). `--project` sets the Julia environment to
 activate (default: the project of `--dir`). `--name` labels the server. Stop it
 later with `julia +rpc kill`.
 

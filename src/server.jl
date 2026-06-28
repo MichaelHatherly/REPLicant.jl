@@ -30,12 +30,14 @@ evaluates code from clients until closed.
 # Protocol
 Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
 byte, then a big-endian `UInt32` body length) followed by the body. Requests are
-`eval` (body is code), `ping`, or `interrupt`; responses are `ok`/`err` (body is the
-result or error text) or `pong` (body is the worker's busy-since timestamp, empty
-when idle). An `interrupt` schedules an `InterruptException` onto the running eval (a
-no-op when idle) and is answered off the worker queue, like `ping`, so it reaches a
-wedged server. Every frame is validated for magic, version, type, and a 16 MB length
-cap before its body is trusted.
+`eval` (body carries the caller's working directory, the target session module, and
+the code), `ping`, `interrupt`, or `reset` (body is a session module name); responses
+are `ok`/`err` (body is the result or error text) or `pong` (body is the worker's
+busy-since timestamp, empty when idle). An `interrupt` schedules an
+`InterruptException` onto the running eval (a no-op when idle) and a `reset` swaps a
+named session for a fresh module; both are answered off the worker queue, like
+`ping`, so they reach a busy server. Every frame is validated for magic, version,
+type, and a 16 MB length cap before its body is trusted.
 
 # Example
 ```julia

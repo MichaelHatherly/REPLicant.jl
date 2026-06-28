@@ -302,7 +302,9 @@ end
         err = IOBuffer()
         @test REPLicant.cli(["--port=$port", "-e", "z"]; out, err) == 1
         @test contains(String(take!(err)), "UndefVarError")
-        @test REPLicant.cli(["--port=$port", "--module=Other", "-e", "z"]; out, err = IOBuffer()) == 1
+        other = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=Other", "-e", "z"]; out, err = other) == 1
+        @test contains(String(take!(other)), "UndefVarError")
     end
 end
 
@@ -347,20 +349,33 @@ end
     mktempdir() do registry
         withenv("REPLICANT_DIR" => registry) do
             mktempdir() do work
-                out = IOBuffer()
-                # Point the spawned process at REPLicant's own project so `using
-                # REPLicant` resolves without a configured global env.
-                rc = REPLicant.cli(["start", "--dir=$work", "--project=$(pkgdir(REPLicant))"]; out)
-                @test rc == 0
-                message = String(take!(out))
-                @test contains(message, "started REPLicant server")
-                port = parse(Int, match(r"port (\d+)", message).captures[1])
                 try
+                    out = IOBuffer()
+                    # Point the spawned process at REPLicant's own project so `using
+                    # REPLicant` resolves without a configured global env. `--name`
+                    # exercises the detached label path.
+                    rc = REPLicant.cli(
+                        ["start", "--dir=$work", "--name=api", "--project=$(pkgdir(REPLicant))"]; out,
+                    )
+                    @test rc == 0
+                    message = String(take!(out))
+                    @test contains(message, "started REPLicant server")
+                    port = parse(Int, match(r"port (\d+)", message).captures[1])
+
+                    # The label took effect and the server evaluates.
+                    listing = IOBuffer()
+                    @test REPLicant.cli(["ls"]; out = listing) == 0
+                    @test contains(String(take!(listing)), "api")
                     result = IOBuffer()
                     @test REPLicant.cli(["--port=$port", "-e", "6 * 7"]; out = result) == 0
                     @test strip(String(take!(result))) == "42"
                 finally
-                    REPLicant.cli(["kill", "--port=$port"]; out = IOBuffer())
+                    # Kill any server registered in this isolated registry, so a
+                    # failure before the port is parsed never leaks the process.
+                    for entry in REPLicant._read_entries()
+                        pid = tryparse(Int, entry.pid)
+                        isnothing(pid) || REPLicant._signal_process(pid, REPLicant.SIGKILL)
+                    end
                 end
             end
         end

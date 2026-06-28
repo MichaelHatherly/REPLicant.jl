@@ -9,10 +9,11 @@
 #   length   UInt32 (BE)  4 bytes  body byte count
 #   body     length bytes          UTF-8
 #
-# Request types are `eval`/`ping`/`interrupt`, response types `ok`/`err`/`pong`.
-# The type code is an open enum: new response codes (a serialized value, a MIME
-# bundle) extend the protocol without a format break. Every read validates magic,
-# version, type, and length before trusting the body.
+# Request types are `eval`/`ping`/`interrupt`/`reset`, response types
+# `ok`/`err`/`pong`. An `eval` body is structured (see `_encode_eval_body`); the
+# others are a name or empty. The type code is an open enum: new response codes (a
+# serialized value, a MIME bundle) extend the protocol without a format break. Every
+# read validates magic, version, type, and length before trusting the body.
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
@@ -67,7 +68,8 @@ function _take_field(bytes, pos::Integer)
     count = parse(Int, String(bytes[pos:(newline - 1)]))
     start = newline + 1
     stop = start + count - 1
-    stop > lastindex(bytes) && error("malformed eval body: field length exceeds body")
+    (count < 0 || stop > lastindex(bytes)) &&
+        error("malformed eval body: field length out of range")
     return String(bytes[start:stop]), stop + 1
 end
 

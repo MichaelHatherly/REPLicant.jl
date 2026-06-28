@@ -53,7 +53,7 @@ end
 
 # Build a selection error listing the candidate servers, showing --name for
 # labeled ones and --port for the rest.
-function _candidates_error(candidates, message::AbstractString)
+function _candidates_error(candidates::Vector{RegistryEntry}, message::AbstractString)
     io = IOBuffer()
     println(io, "$message; candidates:")
     for entry in candidates
@@ -400,13 +400,23 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     dir = isempty(parsed.dir) ? pwd() : abspath(parsed.dir)
     isdir(dir) || error("directory not found: $dir")
     project = isempty(parsed.project) ? "@." : parsed.project
+    root = _project_root(dir)
+
+    # Refuse a name a live server in the target project already holds, so a conflict
+    # fails here with a clear error rather than silently killing the detached process
+    # when its own `label!` throws after it has already registered.
+    if !isempty(parsed.name)
+        conflict = _label_conflict(root, parsed.name, 0)
+        isnothing(conflict) || error(
+            "a REPLicant server in $root is already labeled \"$(parsed.name)\" (port $conflict)",
+        )
+    end
 
     # The detached server runs the same recipe an interactive session does: start,
     # wait for the port, optionally label, then block on the server task forever.
     label = isempty(parsed.name) ? "" : "REPLicant.label!($(repr(parsed.name))); "
     script = "using REPLicant; s = REPLicant.Server(save = true); take!(s.channel); $(label)wait(s.task)"
 
-    before = Set(entry.port for entry in _read_entries())
     command = Cmd(
         `$(Base.julia_cmd()) --project=$project --startup-file=no -e $script`;
         detach = true,
@@ -415,26 +425,24 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     process =
         run(pipeline(command; stdin = devnull, stdout = devnull, stderr = devnull); wait = false)
 
-    entry = _await_entry(dir, before, process)
+    entry = _await_entry(process)
     println(out, "started REPLicant server on port $(entry.port) for $(entry.project)")
     return 0
 end
 
-# Wait for a newly started server to register: a live entry, rooted at `dir`'s
-# project, whose port was not already present in `before`. Fails fast when the
-# spawned process exits before registering (e.g. REPLicant missing from the env).
-function _await_entry(dir::AbstractString, before::Set{Int}, process; timeout = 60)
-    root = _project_root(dir)
+# Wait for the spawned server to register, matched by its own pid so a stale entry
+# or a concurrent start is never mistaken for it. Fails fast when the process exits
+# before registering (e.g. REPLicant missing from the env).
+function _await_entry(process; timeout = 60)
+    pid = Base.getpid(process)
     deadline = time() + timeout
     while time() < deadline
         for entry in _read_entries()
-            entry.port in before && continue
-            _canonical(entry.project) == root || continue
-            _ping(entry.port) && return entry
+            tryparse(Int, entry.pid) == pid && _ping(entry.port) && return entry
         end
         Base.process_exited(process) && error(
             "the server process exited before registering; \
-            check that REPLicant is installed for $root",
+            check that REPLicant is installed for the target project",
         )
         sleep(0.1)
     end
