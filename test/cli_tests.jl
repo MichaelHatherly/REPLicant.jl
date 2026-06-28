@@ -373,6 +373,19 @@ end
 @testitem "client_start_spawns_detached_server" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
+    # `start` spawns `julia` on PATH (pkgimages on), but the test runner runs under
+    # `--check-bounds=yes` (pkgimages off), so REPLicant's image is not yet built for
+    # this invocation. Build it now, unbounded, so the timed start below registers
+    # instead of compiling cold (slow enough to time out on Windows). In production
+    # the image already exists.
+    run(
+        pipeline(
+            `julia --project=$(pkgdir(REPLicant)) --startup-file=no -e "using REPLicant"`;
+            stdout = devnull,
+            stderr = devnull,
+        ),
+    )
+
     mktempdir() do registry
         withenv("REPLICANT_DIR" => registry) do
             mktempdir() do work

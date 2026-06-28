@@ -456,8 +456,10 @@ end
 
 # Wait for the spawned server to register, matched by its own pid so a stale entry
 # or a concurrent start is never mistaken for it. Fails fast when the process exits
-# before registering, surfacing its captured stderr.
-function _await_entry(process, log::AbstractString; timeout = 60)
+# before registering, surfacing its captured stderr. The timeout is generous because
+# a first start on a channel where REPLicant is not yet precompiled builds its
+# package image before the server can register.
+function _await_entry(process, log::AbstractString; timeout = 180)
     pid = Base.getpid(process)
     deadline = time() + timeout
     while time() < deadline
