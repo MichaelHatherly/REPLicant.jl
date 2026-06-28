@@ -192,13 +192,13 @@ function _reply_error(sock::IO, id::Integer, error)
 end
 
 function _handle_eval(
-        sock::IO, id::Integer, code::AbstractString, mod::Union{Module, Nothing},
-        verbose, dir::AbstractString, mod_name::AbstractString, sessions::SessionStore,
+        sock::IO, id::Integer, code::AbstractString, mod::Module,
+        verbose, dir::AbstractString,
     )
     return try
         verbose && @info "Received code" id code = Text(code)
 
-        result = _evaluate_request(code, id, mod, dir, mod_name, sessions)
+        result = _evaluate_request(code, id, mod, dir)
         _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
 
         verbose && @info "Sent result" id result = Text(result.output)

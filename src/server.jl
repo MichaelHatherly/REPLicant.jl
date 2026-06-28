@@ -144,15 +144,17 @@ end
 
 # An evaluation handed from the dispatcher to the worker: the connection to reply
 # on, its id, the code to run, the caller's working directory (the eval runs there;
-# empty keeps the server's cwd), and the target session module name (empty evaluates
-# into the default module). Pings, interrupts, and resets never become a
-# `ClientRequest`; they are answered in the dispatcher.
+# empty keeps the server's cwd), and the module to evaluate into. The module is
+# resolved in the dispatcher when the request is accepted, so a `reset` that arrives
+# afterward cannot swap an already-queued eval's session out from under it. Pings,
+# interrupts, and resets never become a `ClientRequest`; they are answered in the
+# dispatcher.
 struct ClientRequest
     socket::Sockets.TCPSocket
     id::Int
     code::String
     cwd::String
-    mod_name::String
+    mod::Module
 end
 
 """
@@ -279,11 +281,9 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                         request.socket,
                         request.id,
                         request.code,
-                        srv.mod,
+                        request.mod,
                         srv.verbose,
                         request.cwd,
-                        request.mod_name,
-                        srv.sessions,
                     )
                     # Deliver an interrupt on the eval's own thread. Pinned there by
                     # `@async`, the watcher runs only when the eval has yielded, so
@@ -409,7 +409,10 @@ function _dispatch(
             srv.verbose && @info "Answered reset" id name = frame.body
         else
             decoded = _decode_eval_body(frame.body)
-            put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, decoded.mod))
+            # Resolve the target module now, while accepting the request, so a later
+            # reset cannot change which module this eval runs in.
+            mod = _request_module(srv, decoded.mod)
+            put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
             enqueued = true
         end
     catch error

@@ -343,6 +343,20 @@ end
     @test contains(message, "/some/project/a")
 end
 
+@testitem "client_cross_project_warns_through_cli" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        err = IOBuffer()
+        # Resolve from a directory the lone server does not own: the eval still runs,
+        # the warning goes to stderr, and stdout carries only the result.
+        @test REPLicant.cli(["--project=/no/such/project", "-e", "6 * 7"]; out, err) == 0
+        @test strip(String(take!(out))) == "42"
+        @test contains(String(take!(err)), "no server for")
+    end
+end
+
 @testitem "client_start_spawns_detached_server" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

@@ -73,7 +73,7 @@ end
 # project was selected. Returns the entry so callers can `return _warn_foreign(...)`.
 # Goes to `err` so it never corrupts a result parsed from stdout.
 function _warn_foreign(err::IO, entry::RegistryEntry, target::AbstractString)
-    println(err, "replicant: no server for $target; using server in $(entry.project)")
+    println(err, "replicant: no server for $target; falling back to the server in $(entry.project)")
     return entry
 end
 
@@ -417,36 +417,45 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     label = isempty(parsed.name) ? "" : "REPLicant.label!($(repr(parsed.name))); "
     script = "using REPLicant; s = REPLicant.Server(save = true); take!(s.channel); $(label)wait(s.task)"
 
+    # Capture the detached server's stderr so a startup failure (REPLicant missing,
+    # a precompile error) surfaces in the error instead of vanishing into devnull.
+    # The server keeps logging there for its lifetime, like any daemon's log.
+    log = tempname()
     command = Cmd(
         `$(Base.julia_cmd()) --project=$project --startup-file=no -e $script`;
         detach = true,
         dir,
     )
     process =
-        run(pipeline(command; stdin = devnull, stdout = devnull, stderr = devnull); wait = false)
+        run(pipeline(command; stdin = devnull, stdout = devnull, stderr = log); wait = false)
 
-    entry = _await_entry(process)
-    println(out, "started REPLicant server on port $(entry.port) for $(entry.project)")
+    entry = _await_entry(process, log)
+    println(out, "started REPLicant server on port $(entry.port) for $(entry.project) (log: $log)")
     return 0
+end
+
+# The captured stderr of a failed start, for the error message; empty when the log
+# has nothing.
+function _start_log(log::AbstractString)
+    (isfile(log) && !isempty(read(log, String))) || return ""
+    return "; server stderr:\n" * read(log, String)
 end
 
 # Wait for the spawned server to register, matched by its own pid so a stale entry
 # or a concurrent start is never mistaken for it. Fails fast when the process exits
-# before registering (e.g. REPLicant missing from the env).
-function _await_entry(process; timeout = 60)
+# before registering, surfacing its captured stderr.
+function _await_entry(process, log::AbstractString; timeout = 60)
     pid = Base.getpid(process)
     deadline = time() + timeout
     while time() < deadline
         for entry in _read_entries()
             tryparse(Int, entry.pid) == pid && _ping(entry.port) && return entry
         end
-        Base.process_exited(process) && error(
-            "the server process exited before registering; \
-            check that REPLicant is installed for the target project",
-        )
+        Base.process_exited(process) &&
+            error("the server process exited before registering$(_start_log(log))")
         sleep(0.1)
     end
-    return error("server did not register within $(timeout)s")
+    return error("server did not register within $(timeout)s$(_start_log(log))")
 end
 
 # Reset a named session to a clean module without restarting the process. Resolves

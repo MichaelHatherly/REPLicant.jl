@@ -157,21 +157,12 @@ end
 # Code evaluation.
 #
 
-# Evaluate `code` and format the result REPL-style, returning the rendered text
-# and whether evaluation (or formatting) errored. The `errored` flag drives the
-# response frame's type so the client can route failures and set its exit code.
-# `dir` is the caller's working directory (empty keeps the server's cwd); `mod_name`
-# names a session submodule (empty evaluates into the default module).
-function _evaluate(
-        code::AbstractString, id::Integer, srv_mod::Union{Module, Nothing},
-        dir::AbstractString, mod_name::AbstractString,
-        sessions::SessionStore = SessionStore(),
-    )
-    # The default module maintains state between evaluations: bindings defined in
-    # one call are visible in the next. A named session evaluates into a standalone
-    # module instead, isolating its state without polluting the default.
-    mod = isempty(mod_name) ? @something(srv_mod, Base.active_module()) :
-        _session_module(sessions, mod_name)
+# Evaluate `code` in `mod`, formatting the result REPL-style and returning the
+# rendered text and whether evaluation (or formatting) errored. The `errored` flag
+# drives the response frame's type so the client can route failures and set its exit
+# code. `dir` is the caller's working directory (empty keeps the server's cwd). The
+# module is resolved by the dispatcher (see `_request_module`) before this runs.
+function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::AbstractString)
     if _is_help_query(code)
         query = chop(lstrip(code); head = 1, tail = 0)  # drop one leading `?`
         return _help(query, mod)
@@ -220,6 +211,15 @@ function _new_session(sym::Symbol)
     mod = Module(sym)
     Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))
     return mod
+end
+
+# The module a request evaluates into: the default session (the server's module, or
+# `Main`) when no `--module` is given, else the named session. Called by the
+# dispatcher when a request is accepted, so the eval's module is fixed before any
+# later reset can swap it.
+function _request_module(srv::Server, name::AbstractString)
+    isempty(name) && return @something(srv.mod, Base.active_module())
+    return _session_module(srv.sessions, name)
 end
 
 # Resolve a named session module, creating it on first use. State defined in one
@@ -349,13 +349,10 @@ __notify_busy(::Any) = nothing
 
 # Evaluate a remote request while signaling the prompt that work is in flight.
 # Pings never reach here, so the indicator reflects only real evaluations.
-function _evaluate_request(
-        code::AbstractString, id::Integer, mod::Union{Module, Nothing},
-        dir::AbstractString, mod_name::AbstractString, sessions::SessionStore,
-    )
+function _evaluate_request(code::AbstractString, id::Integer, mod::Module, dir::AbstractString)
     _notify_busy(1)
     return try
-        _evaluate(code, id, mod, dir, mod_name, sessions)
+        _evaluate(code, id, mod, dir)
     finally
         _notify_busy(-1)
     end

@@ -49,6 +49,13 @@ julia +rpc --dir /path/to/project -e 'readdir()'
 A `cd` inside an eval does not leak: the next call runs in the caller's directory
 again.
 
+The directory is set on the server process for the eval's duration (Julia has one
+working directory per process, not per task). The worker is sequential, so evals
+never see each other's directory, but a person sharing the same server through its
+interactive REPL sees the eval's directory while it runs. A server started with
+`julia +rpc start` is headless, so this only applies to a server shared with a live
+REPL.
+
 ## Bounding the wait
 
 By default the client waits as long as the eval runs, so a deliberate long compute
@@ -108,3 +115,8 @@ julia +rpc reset --module build
 
 `Main` cannot be reset (it is the process default), so `reset` requires
 `--module`.
+
+Each named session lives for the server's lifetime; `reset` empties one but keeps
+the name. Reusing a small set of names keeps memory flat. A server handed a fresh
+name on every call accumulates modules, so restart it (or reuse names) to reclaim
+that memory.
