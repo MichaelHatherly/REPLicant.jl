@@ -28,6 +28,48 @@ julia +rpc --name=main -e '21 * 2'
 Several servers can run in one project; each label is unique among live servers
 there. An agent reaching a server by `--port` can label it the same way.
 
+## Start a server
+
+`julia +rpc start` launches a server in a detached process that outlives the
+client, then prints its port once it has registered:
+
+```bash
+julia +rpc start                       # serve the current directory's project
+julia +rpc start --dir /path/to/proj   # serve another directory
+julia +rpc start --project /env --name api   # pick the env, label it
+julia +rpc start --channel 1.10        # run a different Julia version
+```
+
+`--dir` sets the working directory; the server is rooted at the enclosing project
+(the git top-level of `--dir`, else `--dir` itself), which is how clients discover
+it (default: the caller's directory). `--project` sets the Julia environment to
+activate (default: the project of `--dir`). `--name` labels the server. Stop it
+later with `julia +rpc kill`.
+
+`--channel <name>` runs the server on a different juliaup channel (default: your
+default channel). The channel must be installed (`juliaup add <name>`) and its global
+environment must have REPLicant of a matching version, or the client reads the server
+as a version-skew peer.
+
+A `start`ed server loads your `startup.jl`, so Revise and other warm-session setup
+apply. A one-off `julia +rpc` eval does not.
+
+A server is pinned to one environment for its life. To work in a different
+environment, `start` another server for it; the selection cascade routes each
+`julia +rpc` call to the server owning its directory.
+
+## Reset a session
+
+`julia +rpc reset --module <name>` swaps a named session for a fresh, empty module,
+giving a clean slate without losing the warm process:
+
+```bash
+julia +rpc reset --module build
+```
+
+The default session is the process's `Main` and cannot be reset, so `--module` is
+required. See `evaluate.md` for named sessions.
+
 ## Inspect a server
 
 When a server was started with `save = true` (as the recommended startup.jl

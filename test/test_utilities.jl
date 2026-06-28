@@ -5,9 +5,11 @@
     import Test
 
     # Send an eval frame without waiting for the response. Used to hold a
-    # connection slot open.
-    function sendframe(sock, code)
-        REPLicant._write_frame(sock, REPLicant.REQUEST_EVAL, code)
+    # connection slot open. Encodes the v2 eval body (the CLI's `cwd`/`mod` fields
+    # default to empty: keep the server's cwd and the default module).
+    function sendframe(sock, code; cwd = "", mod = "")
+        body = REPLicant._encode_eval_body(; cwd, mod, code)
+        REPLicant._write_frame(sock, REPLicant.REQUEST_EVAL, body)
         return sock
     end
 
@@ -21,21 +23,25 @@
     end
 
     # Frame an eval request the way the CLI does and return the response body.
-    function request(port, code)
+    function request(port, code; cwd = "", mod = "")
         sock = Sockets.connect(Sockets.localhost, port)
         try
-            sendframe(sock, code)
+            sendframe(sock, code; cwd, mod)
             return readresp(sock)
         finally
             close(sock)
         end
     end
 
-    # Send an arbitrary typed frame and return the full response frame.
+    # Send an arbitrary typed frame and return the full response frame. An eval
+    # body is encoded to the v2 layout; other types carry the raw body.
     function requestframe(port, type, body)
         sock = Sockets.connect(Sockets.localhost, port)
         try
-            REPLicant._write_frame(sock, type, body)
+            payload =
+                type == REPLicant.REQUEST_EVAL ?
+                REPLicant._encode_eval_body(; cwd = "", mod = "", code = body) : body
+            REPLicant._write_frame(sock, type, payload)
             return readframe(sock)
         finally
             close(sock)

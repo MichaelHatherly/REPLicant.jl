@@ -30,6 +30,32 @@ avoids the question.
 Output is REPL-style: captured stdout and stderr first, then the value, or a
 scrubbed error with backtrace.
 
+## Working directory
+
+The eval runs in the directory where you invoked `julia +rpc`, not where the
+server started, so relative paths resolve against your shell's location:
+
+```bash
+cd src
+julia +rpc -e 'isfile("REPLicant.jl")'   # true: resolved against src/
+```
+
+Override the directory with `--dir`:
+
+```bash
+julia +rpc --dir /path/to/project -e 'readdir()'
+```
+
+A `cd` inside an eval does not leak: the next call runs in the caller's directory
+again.
+
+The directory is set on the server process for the eval's duration (Julia has one
+working directory per process, not per task). The worker is sequential, so evals
+never see each other's directory, but a person sharing the same server through its
+interactive REPL sees the eval's directory while it runs. A server started with
+`julia +rpc start` is headless, so this only applies to a server shared with a live
+REPL.
+
 ## Bounding the wait
 
 By default the client waits as long as the eval runs, so a deliberate long compute
@@ -40,8 +66,8 @@ julia +rpc --timeout 10 -e 'long_running()'
 ```
 
 On expiry the client exits non-zero and prints a message pointing at `julia +rpc
-kill`. The eval keeps running on the server; the timeout only frees the caller.
-See `servers.md` for recovering a wedged server.
+interrupt` (or `kill`). The eval keeps running on the server; the timeout only
+frees the caller. See `servers.md` for recovering a wedged server.
 
 ## Help mode
 
@@ -68,3 +94,29 @@ julia +rpc -e 'sum(x)'                    # x is still in scope -> 55
 
 This is the point of a warm session, but `Main` is shared mutable state. Do not
 assume a clean slate. Restart the server for a fresh session.
+
+## Named sessions
+
+`--module <name>` evaluates into a separate session, isolating its state from
+`Main` and from other named sessions. Use a distinct name per task to avoid
+polluting the default session:
+
+```bash
+julia +rpc --module build -e 'cfg = load_config()'   # define in `build`
+julia +rpc --module build -e 'run(cfg)'              # cfg still in scope
+julia +rpc -e 'cfg'                                  # UndefVarError: Main has no cfg
+```
+
+Clear a named session without restarting the server:
+
+```bash
+julia +rpc reset --module build
+```
+
+`Main` cannot be reset (it is the process default), so `reset` requires
+`--module`.
+
+Each named session lives for the server's lifetime; `reset` empties one but keeps
+the name. Reusing a small set of names keeps memory flat. A server handed a fresh
+name on every call accumulates modules, so restart it (or reuse names) to reclaim
+that memory.

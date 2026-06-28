@@ -28,7 +28,7 @@ end
     # `?`-strip and dispatch.
     import REPL
     mod = Module()
-    result = REPLicant._evaluate("?for", 1, mod)
+    result = REPLicant._evaluate("?for", 1, mod, "")
     @test !result.errored
     @test contains(result.output, "for")
     @test contains(result.output, "loop")

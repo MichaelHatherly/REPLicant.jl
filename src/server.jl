@@ -2,6 +2,15 @@
 # Socket server.
 #
 
+# Named sessions (`--module`), each a standalone module reused across calls. The
+# lock is collocated with the modules it guards: the worker reads on eval, the
+# dispatcher rewrites an entry on reset, so every access takes the lock.
+struct SessionStore
+    lock::ReentrantLock
+    modules::Dict{String, Module}
+end
+SessionStore() = SessionStore(ReentrantLock(), Dict{String, Module}())
+
 """
     Server(; max_connections = 100, read_timeout_seconds = 30.0, save = false, verbose = false)
 
@@ -21,12 +30,14 @@ evaluates code from clients until closed.
 # Protocol
 Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
 byte, then a big-endian `UInt32` body length) followed by the body. Requests are
-`eval` (body is code), `ping`, or `interrupt`; responses are `ok`/`err` (body is the
-result or error text) or `pong` (body is the worker's busy-since timestamp, empty
-when idle). An `interrupt` schedules an `InterruptException` onto the running eval (a
-no-op when idle) and is answered off the worker queue, like `ping`, so it reaches a
-wedged server. Every frame is validated for magic, version, type, and a 16 MB length
-cap before its body is trusted.
+`eval` (body carries the caller's working directory, the target session module, and
+the code), `ping`, `interrupt`, or `reset` (body is a session module name); responses
+are `ok`/`err` (body is the result or error text) or `pong` (body is the worker's
+busy-since timestamp, empty when idle). An `interrupt` schedules an
+`InterruptException` onto the running eval (a no-op when idle) and a `reset` swaps a
+named session for a fresh module; both are answered off the worker queue, like
+`ping`, so they reach a busy server. Every frame is validated for magic, version,
+type, and a 16 MB length cap before its body is trusted.
 
 # Example
 ```julia
@@ -62,6 +73,9 @@ mutable struct Server
     # is parked. Same-thread delivery is the only safe way to throw into a
     # cooperatively-running task. Written by the worker, read by the dispatcher.
     interrupt_signal::Union{Base.Event, Nothing}
+    # Named sessions (`--module`), with the lock that serializes worker eval against
+    # dispatcher reset.
+    sessions::SessionStore
 
     function Server(
             mod = nothing;
@@ -83,6 +97,7 @@ mutable struct Server
         srv.name = ""
         srv.busy_since = nothing
         srv.interrupt_signal = nothing
+        srv.sessions = SessionStore()
         srv.task = errormonitor(@async _server(srv))
         # Tie the channel's lifetime to the task so a startup failure closes the
         # channel and surfaces the error to `take!` instead of blocking forever.
@@ -128,12 +143,18 @@ function Base.show(io::IO, ::MIME"text/plain", srv::Server)
 end
 
 # An evaluation handed from the dispatcher to the worker: the connection to reply
-# on, its id, and the code to run. Pings never become a `ClientRequest`; they are
-# answered in the dispatcher.
+# on, its id, the code to run, the caller's working directory (the eval runs there;
+# empty keeps the server's cwd), and the module to evaluate into. The module is
+# resolved in the dispatcher when the request is accepted, so a `reset` that arrives
+# afterward cannot swap an already-queued eval's session out from under it. Pings,
+# interrupts, and resets never become a `ClientRequest`; they are answered in the
+# dispatcher.
 struct ClientRequest
     socket::Sockets.TCPSocket
     id::Int
     code::String
+    cwd::String
+    mod::Module
 end
 
 """
@@ -260,8 +281,9 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                         request.socket,
                         request.id,
                         request.code,
-                        srv.mod,
+                        request.mod,
                         srv.verbose,
+                        request.cwd,
                     )
                     # Deliver an interrupt on the eval's own thread. Pinned there by
                     # `@async`, the watcher runs only when the eval has yielded, so
@@ -379,8 +401,18 @@ function _dispatch(
             delivered = _interrupt_eval(srv)
             _write_frame(sock, RESPONSE_OK, delivered ? "interrupted" : "no evaluation running")
             srv.verbose && @info "Answered interrupt" id delivered
+        elseif frame.type == REQUEST_RESET
+            # Reset is answered off the worker queue, like ping and interrupt. It
+            # rebinds the named session module, so a later eval into that name gets
+            # a clean module; an eval already in flight finishes in the old one.
+            _write_frame(sock, RESPONSE_OK, _reset_session(srv, frame.body))
+            srv.verbose && @info "Answered reset" id name = frame.body
         else
-            put!(request_queue, ClientRequest(sock, id, frame.body))
+            decoded = _decode_eval_body(frame.body)
+            # Resolve the target module now, while accepting the request, so a later
+            # reset cannot change which module this eval runs in.
+            mod = _request_module(srv, decoded.mod)
+            put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
             enqueued = true
         end
     catch error

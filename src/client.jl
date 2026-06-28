@@ -53,7 +53,7 @@ end
 
 # Build a selection error listing the candidate servers, showing --name for
 # labeled ones and --port for the rest.
-function _candidates_error(candidates, message::AbstractString)
+function _candidates_error(candidates::Vector{RegistryEntry}, message::AbstractString)
     io = IOBuffer()
     println(io, "$message; candidates:")
     for entry in candidates
@@ -69,11 +69,21 @@ function _candidates_error(candidates, message::AbstractString)
     return ErrorException(String(take!(io)))
 end
 
+# Warn that no server owns the caller's location, so a server rooted at another
+# project was selected. Returns the entry so callers can `return _warn_foreign(...)`.
+# Goes to `err` so it never corrupts a result parsed from stdout.
+function _warn_foreign(err::IO, entry::RegistryEntry, target::AbstractString)
+    println(err, "replicant: no server for $target; falling back to the server in $(entry.project)")
+    return entry
+end
+
 # The selection cascade over `candidates`: narrow to the deepest project that owns
 # `project`, pick by --name or auto-select the lone server; finally fall back to a
-# global name match. Returns the chosen entry.
+# global name match. Returns the chosen entry. A fallback to a server outside the
+# caller's project warns on `err`.
 function _select_entry(
-        candidates::Vector{RegistryEntry}, project::AbstractString, name::AbstractString,
+        candidates::Vector{RegistryEntry}, project::AbstractString, name::AbstractString;
+        err::IO = stderr,
     )
     isempty(candidates) && error("no running REPLicant servers found")
 
@@ -103,11 +113,11 @@ function _select_entry(
 
     if !isempty(name)
         named = filter(e -> e.name == name, candidates)
-        length(named) == 1 && return named[1]
+        length(named) == 1 && return _warn_foreign(err, named[1], target)
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
     elseif length(candidates) == 1
-        return candidates[1]
+        return _warn_foreign(err, candidates[1], target)
     end
 
     throw(_candidates_error(candidates, "could not pick a server for $target"))
@@ -115,9 +125,11 @@ end
 
 # Resolve an eval target to a port: an explicit port wins and connects directly;
 # otherwise run the cascade over the live servers.
-function _resolve_port(port::Integer, project::AbstractString, name::AbstractString)
+function _resolve_port(
+        port::Integer, project::AbstractString, name::AbstractString; err::IO = stderr,
+    )
     port > 0 && return port
-    return _select_entry(_live_entries(), project, name).port
+    return _select_entry(_live_entries(), project, name; err).port
 end
 
 # Resolve a kill target to its registry entry. Unlike eval, this reads the raw
@@ -143,7 +155,10 @@ end
 
 # Flags that carry a value, as `--flag value` or `--flag=value`. `-e`/`--eval` are
 # aliases for the code to run.
-const VALUED_FLAGS = ("--port", "--project", "--name", "--timeout", "-e", "--eval")
+const VALUED_FLAGS = (
+    "--port", "--project", "--name", "--timeout", "--dir", "--module", "--channel",
+    "-e", "--eval",
+)
 # Flags that stand alone. `-f` is an alias for `--force`.
 const BARE_FLAGS = ("--force", "-f")
 
@@ -205,6 +220,9 @@ function _parse_args(args::Vector{String})
         port,
         project = get(values, "--project", ""),
         name = get(values, "--name", ""),
+        dir = get(values, "--dir", ""),
+        mod = get(values, "--module", ""),
+        channel = get(values, "--channel", ""),
         code,
         file,
         script_args,
@@ -264,10 +282,11 @@ end
 function _send(
         port::Integer, code::String;
         out::IO = stdout, err::IO = stderr, timeout_seconds = nothing,
+        cwd::AbstractString = "", mod::AbstractString = "",
     )
     sock = Sockets.connect(Sockets.localhost, port)
     try
-        _write_frame(sock, REQUEST_EVAL, code)
+        _write_frame(sock, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
         frame = try
             _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
         catch timeout
@@ -275,8 +294,8 @@ function _send(
             throw(
                 ErrorException(
                     "evaluation did not respond within $(timeout.timeout_seconds)s; \
-                    the server may be wedged on a long-running or non-returning eval. \
-                    Recover with: julia +rpc kill",
+                    the eval is still running on the server. Free it with: \
+                    julia +rpc interrupt (or julia +rpc kill to stop the process).",
                 ),
             )
         end
@@ -375,6 +394,112 @@ function _kill_server(args::Vector{String}; out::IO = stdout)
     return 0
 end
 
+# The Julia launcher for a started server: `julia` on PATH (the default channel), or
+# `julia +<channel>` for a specific version. Using the launcher rather than
+# `Base.julia_cmd()` keeps the client's own flags (its `--startup-file=no`, sysimage,
+# optimization) from forwarding, so the server runs the channel's normal defaults.
+# The `rpc` channel already requires juliaup, so `julia` on PATH is its launcher.
+_server_julia(channel::AbstractString) = isempty(channel) ? `julia` : `julia +$channel`
+
+# Start a server in a detached Julia process so it outlives this client. Roots it
+# at `--dir` (default the caller's directory) and `--project` (default `@.`, the
+# project of that directory), runs on `--channel` (default the launcher's default
+# version), optionally labels it with `--name`, then waits for it to register before
+# reporting the port. Stop it later with `julia +rpc kill`.
+function _start_server(args::Vector{String}; out::IO = stdout)
+    parsed = _parse_args(args)
+    dir = isempty(parsed.dir) ? pwd() : abspath(parsed.dir)
+    isdir(dir) || error("directory not found: $dir")
+    project = isempty(parsed.project) ? "@." : parsed.project
+    root = _project_root(dir)
+
+    # Refuse a name a live server in the target project already holds, so a conflict
+    # fails here with a clear error rather than silently killing the detached process
+    # when its own `label!` throws after it has already registered.
+    if !isempty(parsed.name)
+        conflict = _label_conflict(root, parsed.name, 0)
+        isnothing(conflict) || error(
+            "a REPLicant server in $root is already labeled \"$(parsed.name)\" (port $conflict)",
+        )
+    end
+
+    # The detached server runs the same recipe an interactive session does: start,
+    # wait for the port, optionally label, then block on the server task forever.
+    label = isempty(parsed.name) ? "" : "REPLicant.label!($(repr(parsed.name))); "
+    script = "using REPLicant; s = REPLicant.Server(save = true); take!(s.channel); $(label)wait(s.task)"
+
+    # Snapshot the live servers (pruning dead ones) so the new entry is identified as
+    # the one that appears for this project afterward, even across a reused port.
+    before = Set(entry.port for entry in _live_entries())
+
+    # Capture the detached server's stderr so a startup failure (REPLicant missing,
+    # a precompile error) surfaces in the error instead of vanishing into devnull.
+    # The server keeps logging there for its lifetime, like any daemon's log. No
+    # `--startup-file=no`: the server is a warm session, so it loads the user's
+    # startup.jl (Revise and other REPL setup), unlike a one-off client eval.
+    log = tempname()
+    command = Cmd(
+        `$(_server_julia(parsed.channel)) --project=$project -e $script`;
+        detach = true,
+        dir,
+    )
+    process =
+        run(pipeline(command; stdin = devnull, stdout = devnull, stderr = log); wait = false)
+
+    entry = _await_entry(root, before, process, log)
+    println(out, "started REPLicant server on port $(entry.port) for $(entry.project) (log: $log)")
+    return 0
+end
+
+# The captured stderr of a failed start, for the error message; empty when the log
+# has nothing.
+function _start_log(log::AbstractString)
+    (isfile(log) && !isempty(read(log, String))) || return ""
+    return "; server stderr:\n" * read(log, String)
+end
+
+# Wait for the spawned server to register: a live entry rooted at `root` whose port
+# is new since `before`. Matching the entry rather than the spawned process's pid is
+# what works when `julia` is a launcher (the juliaup shim, or a detached PATH spawn
+# on Windows) that runs the server as a child with a different pid. Fails fast when
+# the process exits before registering, surfacing its captured stderr. The timeout is
+# generous because a first start on a channel where REPLicant is not yet precompiled
+# builds its package image before the server can register.
+function _await_entry(root::AbstractString, before::Set{Int}, process, log::AbstractString; timeout = 180)
+    deadline = time() + timeout
+    while time() < deadline
+        for entry in _read_entries()
+            entry.port in before && continue
+            _canonical(entry.project) == root || continue
+            _ping(entry.port) && return entry
+        end
+        Base.process_exited(process) &&
+            error("the server process exited before registering$(_start_log(log))")
+        sleep(0.1)
+    end
+    return error("server did not register within $(timeout)s$(_start_log(log))")
+end
+
+# Reset a named session to a clean module without restarting the process. Resolves
+# a live server and sends a reset frame carrying the module name. The default
+# session is the process's `Main` and cannot be reset, so `--module` is required.
+function _reset_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
+    parsed = _parse_args(args)
+    isempty(parsed.mod) &&
+        error("reset needs --module <name>; the default session cannot be reset")
+    target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
+    sock = Sockets.connect(Sockets.localhost, target)
+    try
+        _write_frame(sock, REQUEST_RESET, parsed.mod)
+        frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
+        isnothing(frame) && error("server closed the connection without a response")
+        println(out, "REPLicant server on port $target: $(frame.body)")
+        return 0
+    finally
+        close(sock)
+    end
+end
+
 # Free a server wedged on a running eval without killing the process. Resolves a
 # live server (the soft tier needs a healthy dispatcher to receive the request, so
 # live resolution gives a clean "no servers" error rather than a hang), schedules an
@@ -398,26 +523,36 @@ end
     cli(args = ARGS; out = stdout, err = stderr) -> Int
 
 Forwarding client entrypoint. A leading `ls`/`list` prints the live servers; a
+leading `start` launches a detached server (`--dir`/`--project`/`--name`/`--channel`); a
 leading `kill` terminates a resolved server (`--force` for SIGKILL); a leading
 `interrupt` frees a server wedged on a running eval, scheduling an
 `InterruptException` onto it without killing the process (`kill` stays the hard
-tier). Otherwise it resolves a target server and forwards code to it, taken from
-`-e`, from a leading `script.jl` positional run with `include` (trailing
-positionals become the script's `ARGS`), or, when neither is given, from stdin.
-`--timeout <seconds>` bounds the wait for a result. Returns a process exit code.
+tier); a leading `reset` clears a named session (`--module`). Otherwise it resolves
+a target server and forwards code to it, taken from `-e`, from a leading `script.jl`
+positional run with `include` (trailing positionals become the script's `ARGS`),
+or, when neither is given, from stdin. The eval runs in the caller's directory
+(override with `--dir`) and in the default session unless `--module <name>` selects
+one. `--timeout <seconds>` bounds the wait for a result. Returns a process exit code.
 """
+# Run a leading subcommand (`ls`/`start`/`kill`/`interrupt`/`reset`) and return its
+# exit code, or `nothing` when `args` does not start with one, so `cli` falls
+# through to evaluation.
+function _run_subcommand(args::Vector{String}, out::IO, err::IO)
+    isempty(args) && return nothing
+    command, rest = args[1], args[2:end]
+    command in ("ls", "list") && return (_list_servers(out); 0)
+    command == "start" && return _start_server(rest; out)
+    command == "kill" && return _kill_server(rest; out)
+    command == "interrupt" && return _interrupt_server(rest; out)
+    command == "reset" && return _reset_server(rest; out, err)
+    return nothing
+end
+
 function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
     try
-        if !isempty(args) && (args[1] == "ls" || args[1] == "list")
-            _list_servers(out)
-            return 0
-        end
-        if !isempty(args) && args[1] == "kill"
-            return _kill_server(args[2:end]; out)
-        end
-        if !isempty(args) && args[1] == "interrupt"
-            return _interrupt_server(args[2:end]; out)
-        end
+        handled = _run_subcommand(args, out, err)
+        isnothing(handled) || return handled
+
         parsed = _parse_args(args)
         file = parsed.file
         code = if !isnothing(file)
@@ -427,8 +562,11 @@ function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
         else
             parsed.code
         end
-        target = _resolve_port(parsed.port, parsed.project, parsed.name)
-        return _send(target, code; out, err, timeout_seconds = parsed.timeout)
+        # Run the eval in the caller's directory by default so relative paths
+        # resolve where the agent invoked the client, not where the server started.
+        cwd = isempty(parsed.dir) ? pwd() : abspath(parsed.dir)
+        target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
+        return _send(target, code; out, err, timeout_seconds = parsed.timeout, cwd, mod = parsed.mod)
     catch error
         error isa InterruptException && rethrow()
         message = error isa ErrorException ? error.msg : sprint(showerror, error)

@@ -251,6 +251,177 @@ end
     @test_throws Exception REPLicant._parse_args(["bogus"])
 end
 
+@testitem "client_dir_and_module_parsing" tags = [:cli] begin
+    import REPLicant
+
+    parsed = REPLicant._parse_args(["--dir=/tmp/x", "--module=Sess", "-e", "1"])
+    @test parsed.dir == "/tmp/x"
+    @test parsed.mod == "Sess"
+
+    # Defaults are empty: the client fills in the working directory, and the
+    # default session is used.
+    bare = REPLicant._parse_args(["-e", "1"])
+    @test bare.dir == ""
+    @test bare.mod == ""
+end
+
+@testitem "client_eval_runs_in_caller_dir" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        mktempdir() do dir
+            write(joinpath(dir, "marker.txt"), "hi")
+            out = IOBuffer()
+            # A relative path resolves against --dir, not the server's startup cwd.
+            @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "isfile(\"marker.txt\")"]; out) == 0
+            @test strip(String(take!(out))) == "true"
+
+            # A `cd` inside one eval does not leak into the next: the following eval
+            # still resolves the relative path against --dir. Checked via the marker
+            # file rather than `pwd()` to avoid Windows short/long path mismatches.
+            @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "cd(\"..\"); 1"]; out) == 0
+            take!(out)
+            @test REPLicant.cli(["--port=$port", "--dir=$dir", "-e", "isfile(\"marker.txt\")"]; out) == 0
+            @test strip(String(take!(out))) == "true"
+        end
+    end
+end
+
+@testitem "client_module_isolation" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        # State set in a named session persists across calls under that name.
+        @test REPLicant.cli(["--port=$port", "--module=Sess", "-e", "z = 99"]; out) == 0
+        take!(out)
+        @test REPLicant.cli(["--port=$port", "--module=Sess", "-e", "z"]; out) == 0
+        @test strip(String(take!(out))) == "99"
+
+        # It is invisible in the default session and in another named session.
+        err = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "-e", "z"]; out, err) == 1
+        @test contains(String(take!(err)), "UndefVarError")
+        other = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=Other", "-e", "z"]; out, err = other) == 1
+        @test contains(String(take!(other)), "UndefVarError")
+    end
+end
+
+@testitem "client_reset_clears_module" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        REPLicant.cli(["--port=$port", "--module=Sess", "-e", "keep = 5"]; out = IOBuffer())
+
+        out = IOBuffer()
+        @test REPLicant.cli(["reset", "--port=$port", "--module=Sess"]; out) == 0
+        @test contains(String(take!(out)), "reset module Sess")
+
+        err = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=Sess", "-e", "keep"]; out = IOBuffer(), err) == 1
+        @test contains(String(take!(err)), "UndefVarError")
+
+        # The default session has no resettable name.
+        no_name = IOBuffer()
+        @test REPLicant.cli(["reset", "--port=$port"]; out = IOBuffer(), err = no_name) == 1
+        @test contains(String(take!(no_name)), "needs --module")
+    end
+end
+
+@testitem "select_entry_warns_cross_project" tags = [:cli] begin
+    import REPLicant
+
+    # A server rooted at one project, a caller in an unrelated one: the lone server
+    # is still chosen, with a warning that names the foreign project.
+    entries = [REPLicant.RegistryEntry(9001, "/some/project/a", "", "1.12", "111", "t")]
+    err = IOBuffer()
+    chosen = REPLicant._select_entry(entries, "/different/place", ""; err)
+    @test chosen.port == 9001
+    message = String(take!(err))
+    @test contains(message, "no server for")
+    @test contains(message, "/some/project/a")
+end
+
+@testitem "client_cross_project_warns_through_cli" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        err = IOBuffer()
+        # Resolve from a directory the lone server does not own: the eval still runs,
+        # the warning goes to stderr, and stdout carries only the result.
+        @test REPLicant.cli(["--project=/no/such/project", "-e", "6 * 7"]; out, err) == 0
+        @test strip(String(take!(out))) == "42"
+        @test contains(String(take!(err)), "no server for")
+    end
+end
+
+@testitem "client_channel_launcher" tags = [:cli] begin
+    import REPLicant
+
+    # `--channel` parses (as `_start_server` sees it, after `start` is stripped),
+    # defaulting to empty.
+    @test REPLicant._parse_args(["--channel=1.10"]).channel == "1.10"
+    @test REPLicant._parse_args(String[]).channel == ""
+
+    # The launcher is `julia` on PATH by default, or `julia +<channel>` for a version.
+    @test REPLicant._server_julia("") == `julia`
+    @test REPLicant._server_julia("1.10") == `julia +1.10`
+end
+
+@testitem "client_start_spawns_detached_server" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # `start` spawns `julia` on PATH (pkgimages on), but the test runner runs under
+    # `--check-bounds=yes` (pkgimages off), so REPLicant's image is not yet built for
+    # this invocation. Build it now, unbounded, so the timed start below registers
+    # instead of compiling cold (slow enough to time out on Windows). In production
+    # the image already exists.
+    run(
+        pipeline(
+            `julia --project=$(pkgdir(REPLicant)) --startup-file=no -e "using REPLicant"`;
+            stdout = devnull,
+            stderr = devnull,
+        ),
+    )
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            mktempdir() do work
+                try
+                    out = IOBuffer()
+                    # Point the spawned process at REPLicant's own project so `using
+                    # REPLicant` resolves without a configured global env. `--name`
+                    # exercises the detached label path.
+                    rc = REPLicant.cli(
+                        ["start", "--dir=$work", "--name=api", "--project=$(pkgdir(REPLicant))"]; out,
+                    )
+                    @test rc == 0
+                    message = String(take!(out))
+                    @test contains(message, "started REPLicant server")
+                    port = parse(Int, match(r"port (\d+)", message).captures[1])
+
+                    # The label took effect and the server evaluates.
+                    listing = IOBuffer()
+                    @test REPLicant.cli(["ls"]; out = listing) == 0
+                    @test contains(String(take!(listing)), "api")
+                    result = IOBuffer()
+                    @test REPLicant.cli(["--port=$port", "-e", "6 * 7"]; out = result) == 0
+                    @test strip(String(take!(result))) == "42"
+                finally
+                    # Kill any server registered in this isolated registry, so a
+                    # failure before the port is parsed never leaks the process.
+                    for entry in REPLicant._read_entries()
+                        pid = tryparse(Int, entry.pid)
+                        isnothing(pid) || REPLicant._signal_process(pid, REPLicant.SIGKILL)
+                    end
+                end
+            end
+        end
+    end
+end
+
 @testitem "client_runs_script_file" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

@@ -9,10 +9,11 @@
 #   length   UInt32 (BE)  4 bytes  body byte count
 #   body     length bytes          UTF-8
 #
-# Request types are `eval`/`ping`/`interrupt`, response types `ok`/`err`/`pong`.
-# The type code is an open enum: new response codes (a serialized value, a MIME
-# bundle) extend the protocol without a format break. Every read validates magic,
-# version, type, and length before trusting the body.
+# Request types are `eval`/`ping`/`interrupt`/`reset`, response types
+# `ok`/`err`/`pong`. An `eval` body is structured (see `_encode_eval_body`); the
+# others are a name or empty. The type code is an open enum: new response codes (a
+# serialized value, a MIME bundle) extend the protocol without a format break. Every
+# read validates magic, version, type, and length before trusting the body.
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
@@ -28,18 +29,49 @@ const MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16MB
 const VERSION_SKEW_HELP = "The client and server may be running different REPLicant versions. Reinstall the rpc channel: julia -e 'using REPLicant; REPLicant.install_channel(force = true)'"
 
 const PROTOCOL_MAGIC = Vector{UInt8}("REPL")
-const PROTOCOL_VERSION = 0x01
+const PROTOCOL_VERSION = 0x02
 const FRAME_HEADER_BYTES = length(PROTOCOL_MAGIC) + 6  # magic + version + type + UInt32 length
 
 const REQUEST_EVAL = 0x01
 const REQUEST_PING = 0x02
 const REQUEST_INTERRUPT = 0x03
+const REQUEST_RESET = 0x04
 const RESPONSE_OK = 0x01
 const RESPONSE_ERR = 0x02
 const RESPONSE_PONG = 0x03
 
-const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING, REQUEST_INTERRUPT)
+const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING, REQUEST_INTERRUPT, REQUEST_RESET)
 const RESPONSE_TYPES = (RESPONSE_OK, RESPONSE_ERR, RESPONSE_PONG)
+
+# An eval frame body carries the caller's working directory and target module name
+# alongside the code, so the server runs the eval in the caller's directory and in
+# the named session. Each field is its byte length as ASCII digits, a newline, then
+# that many bytes; the code is whatever remains. Byte lengths keep multibyte paths
+# exact and let the code carry arbitrary newlines. An empty `cwd` skips the
+# server-side `cd`; an empty `mod` evaluates into the default module.
+function _encode_eval_body(; cwd::AbstractString, mod::AbstractString, code::AbstractString)
+    return string(ncodeunits(cwd), '\n', cwd, ncodeunits(mod), '\n', mod, code)
+end
+
+function _decode_eval_body(body::AbstractString)
+    bytes = codeunits(body)
+    cwd, pos = _take_field(bytes, firstindex(bytes))
+    mod, pos = _take_field(bytes, pos)
+    return (; cwd, mod, code = String(bytes[pos:end]))
+end
+
+# Read one length-prefixed field starting at `pos`: ASCII digits, a newline, then
+# that many bytes. Returns the field and the index just past it.
+function _take_field(bytes, pos::Integer)
+    newline = findnext(==(UInt8('\n')), bytes, pos)
+    isnothing(newline) && error("malformed eval body: missing field length")
+    count = parse(Int, String(bytes[pos:(newline - 1)]))
+    start = newline + 1
+    stop = start + count - 1
+    (count < 0 || stop > lastindex(bytes)) &&
+        error("malformed eval body: field length out of range")
+    return String(bytes[start:stop]), stop + 1
+end
 
 # A read that outlived its bound. Carries the bound so callers can phrase their own
 # message; `showerror` keeps the wire-facing text servers reply to clients with.
@@ -159,11 +191,14 @@ function _reply_error(sock::IO, id::Integer, error)
     return nothing
 end
 
-function _handle_eval(sock::IO, id::Integer, code::AbstractString, mod::Union{Module, Nothing}, verbose)
+function _handle_eval(
+        sock::IO, id::Integer, code::AbstractString, mod::Module,
+        verbose, dir::AbstractString,
+    )
     return try
         verbose && @info "Received code" id code = Text(code)
 
-        result = _evaluate_request(code, id, mod)
+        result = _evaluate_request(code, id, mod, dir)
         _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
 
         verbose && @info "Sent result" id result = Text(result.output)

@@ -1,6 +1,6 @@
 @testitem "eval_simple_arithmetic" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._evaluate("2 + 2", 1, mod)
+    result = REPLicant._evaluate("2 + 2", 1, mod, "")
     @test !result.errored
     @test strip(result.output) == "4"
 end
@@ -11,7 +11,7 @@ end
     println("Hello")
     42
     """
-    result = REPLicant._evaluate(code, 1, mod)
+    result = REPLicant._evaluate(code, 1, mod, "")
     lines = split(strip(result.output), '\n')
     @test length(lines) == 2
     @test lines[1] == "Hello"
@@ -25,7 +25,7 @@ end
     y = 20
     x + y
     """
-    result = REPLicant._evaluate(code, 1, mod)
+    result = REPLicant._evaluate(code, 1, mod, "")
     @test strip(result.output) == "30"
 end
 
@@ -37,7 +37,7 @@ end
     end
     greet("World")
     """
-    result = REPLicant._evaluate(code, 1, mod)
+    result = REPLicant._evaluate(code, 1, mod, "")
     @test strip(result.output) == "\"Hello, World!\""
 end
 
@@ -48,34 +48,34 @@ end
     using Statistics
     mean([1, 2, 3, 4, 5])
     """
-    result = REPLicant._evaluate(code, 1, mod)
+    result = REPLicant._evaluate(code, 1, mod, "")
     @test strip(result.output) == "3.0"
 end
 
 @testitem "eval_empty_code" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._evaluate("", 1, mod)
+    result = REPLicant._evaluate("", 1, mod, "")
     @test !result.errored
     @test strip(result.output) == ""
 end
 
 @testitem "eval_nothing_result" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._evaluate("nothing", 1, mod)
+    result = REPLicant._evaluate("nothing", 1, mod, "")
     @test strip(result.output) == ""
 end
 
 @testitem "eval_non_nothing_value_echoes" tags = [:code_evaluation] begin
     mod = Module()
     # Only `nothing` is suppressed; other falsy-looking values still echo.
-    @test strip(REPLicant._evaluate("missing", 1, mod).output) == "missing"
-    @test strip(REPLicant._evaluate("0", 1, mod).output) == "0"
-    @test strip(REPLicant._evaluate("\"\"", 1, mod).output) == "\"\""
+    @test strip(REPLicant._evaluate("missing", 1, mod, "").output) == "missing"
+    @test strip(REPLicant._evaluate("0", 1, mod, "").output) == "0"
+    @test strip(REPLicant._evaluate("\"\"", 1, mod, "").output) == "\"\""
 end
 
 @testitem "eval_array_display" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._evaluate("[1, 2, 3]", 1, mod)
+    result = REPLicant._evaluate("[1, 2, 3]", 1, mod, "")
     @test contains(result.output, "3-element Vector{Int64}")
     @test contains(result.output, "1")
     @test contains(result.output, "2")
@@ -84,14 +84,14 @@ end
 
 @testitem "eval_dict_display" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._evaluate("Dict(:a => 1, :b => 2)", 1, mod)
+    result = REPLicant._evaluate("Dict(:a => 1, :b => 2)", 1, mod, "")
     @test contains(result.output, "Dict{Symbol, Int64}")
     @test contains(result.output, ":a => 1") || contains(result.output, ":b => 2")
 end
 
 @testitem "eval_string_with_quotes" tags = [:code_evaluation] begin
     mod = Module()
-    result = REPLicant._evaluate("\"Hello \\\"World\\\"\"", 1, mod)
+    result = REPLicant._evaluate("\"Hello \\\"World\\\"\"", 1, mod, "")
     @test strip(result.output) == "\"Hello \\\"World\\\"\""
 end
 
@@ -99,7 +99,7 @@ end
     mod = Module()
     # `display(x)` writes through the display stack, not stdout; it must still be
     # captured alongside ordinary printed output.
-    result = REPLicant._evaluate("display([1, 2, 3]); println(\"after\")", 1, mod)
+    result = REPLicant._evaluate("display([1, 2, 3]); println(\"after\")", 1, mod, "")
     @test contains(result.output, "3-element Vector{Int64}")
     @test contains(result.output, "after")
 end
@@ -108,7 +108,7 @@ end
     mod = Module()
     # `run(cmd)` inherits raw fd 1, bypassing the Julia `stdout` object. fd-level
     # capture must still funnel its output into the result.
-    result = REPLicant._evaluate("run(`echo hello`)", 1, mod)
+    result = REPLicant._evaluate("run(`echo hello`)", 1, mod, "")
     @test contains(result.output, "hello")
 end
 
@@ -116,7 +116,7 @@ end
     mod = Module()
     # A C library writing to fd 1 directly (here `puts`) bypasses Julia's streams;
     # fd-level capture catches it.
-    result = REPLicant._evaluate("ccall(:puts, Cint, (Cstring,), \"viac\")", 1, mod)
+    result = REPLicant._evaluate("ccall(:puts, Cint, (Cstring,), \"viac\")", 1, mod, "")
     @test contains(result.output, "viac")
 end
 
@@ -124,7 +124,7 @@ end
     mod = Module()
     # Julia-level writes and raw-fd subprocess writes share one pipe, so they land
     # in write order.
-    result = REPLicant._evaluate("println(\"a\"); run(`echo b`); println(\"c\")", 1, mod)
+    result = REPLicant._evaluate("println(\"a\"); run(`echo b`); println(\"c\")", 1, mod, "")
     lines = split(strip(result.output), '\n')
     @test lines == ["a", "b", "c"]
 end
