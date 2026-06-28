@@ -428,6 +428,10 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     label = isempty(parsed.name) ? "" : "REPLicant.label!($(repr(parsed.name))); "
     script = "using REPLicant; s = REPLicant.Server(save = true); take!(s.channel); $(label)wait(s.task)"
 
+    # Snapshot the live servers (pruning dead ones) so the new entry is identified as
+    # the one that appears for this project afterward, even across a reused port.
+    before = Set(entry.port for entry in _live_entries())
+
     # Capture the detached server's stderr so a startup failure (REPLicant missing,
     # a precompile error) surfaces in the error instead of vanishing into devnull.
     # The server keeps logging there for its lifetime, like any daemon's log. No
@@ -442,7 +446,7 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     process =
         run(pipeline(command; stdin = devnull, stdout = devnull, stderr = log); wait = false)
 
-    entry = _await_entry(process, log)
+    entry = _await_entry(root, before, process, log)
     println(out, "started REPLicant server on port $(entry.port) for $(entry.project) (log: $log)")
     return 0
 end
@@ -454,17 +458,20 @@ function _start_log(log::AbstractString)
     return "; server stderr:\n" * read(log, String)
 end
 
-# Wait for the spawned server to register, matched by its own pid so a stale entry
-# or a concurrent start is never mistaken for it. Fails fast when the process exits
-# before registering, surfacing its captured stderr. The timeout is generous because
-# a first start on a channel where REPLicant is not yet precompiled builds its
-# package image before the server can register.
-function _await_entry(process, log::AbstractString; timeout = 180)
-    pid = Base.getpid(process)
+# Wait for the spawned server to register: a live entry rooted at `root` whose port
+# is new since `before`. Matching the entry rather than the spawned process's pid is
+# what works when `julia` is a launcher (the juliaup shim, or a detached PATH spawn
+# on Windows) that runs the server as a child with a different pid. Fails fast when
+# the process exits before registering, surfacing its captured stderr. The timeout is
+# generous because a first start on a channel where REPLicant is not yet precompiled
+# builds its package image before the server can register.
+function _await_entry(root::AbstractString, before::Set{Int}, process, log::AbstractString; timeout = 180)
     deadline = time() + timeout
     while time() < deadline
         for entry in _read_entries()
-            tryparse(Int, entry.pid) == pid && _ping(entry.port) && return entry
+            entry.port in before && continue
+            _canonical(entry.project) == root || continue
+            _ping(entry.port) && return entry
         end
         Base.process_exited(process) &&
             error("the server process exited before registering$(_start_log(log))")
