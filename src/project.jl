@@ -26,3 +26,31 @@ function _canonical(path::AbstractString)
         abspath(path)
     end
 end
+
+# Walk up from `dir` for the Project.toml that `--project=@.` would activate, and
+# read its sibling Manifest.toml's pinned `julia_version`. `nothing` when no
+# project is found, or its manifest has never been resolved (no Manifest.toml
+# yet, or a pre-`julia_version`-field manifest) -- nothing to compare against.
+# Concrete `String`: this is `_check_julia_version`'s private helper, always
+# called with its already-`String` `search_dir` local.
+function _manifest_julia_version(dir::String)
+    probe = _canonical(dir)
+    while true
+        for project_name in ("JuliaProject.toml", "Project.toml")
+            isfile(joinpath(probe, project_name)) || continue
+            for manifest_name in ("JuliaManifest.toml", "Manifest.toml")
+                manifest_file = joinpath(probe, manifest_name)
+                isfile(manifest_file) || continue
+                m = match(r"^julia_version\s*=\s*\"([^\"]+)\""m, read(manifest_file, String))
+                isnothing(m) && return nothing
+                capture = m.captures[1]
+                return isnothing(capture) ? nothing : String(capture)
+            end
+            return nothing
+        end
+        parent = dirname(probe)
+        parent == probe && return nothing
+        probe = parent
+    end
+    return
+end

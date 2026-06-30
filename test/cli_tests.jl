@@ -506,6 +506,119 @@ end
     end
 end
 
+@testitem "client_manifest_julia_version" tags = [:cli] begin
+    import REPLicant
+
+    mktempdir() do dir
+        # No Project.toml at all: nothing to compare against.
+        @test isnothing(REPLicant._manifest_julia_version(dir))
+
+        write(joinpath(dir, "Project.toml"), "name = \"Probe\"\n")
+
+        # A Project.toml with no manifest yet (never resolved): also nothing.
+        @test isnothing(REPLicant._manifest_julia_version(dir))
+
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "# generated\njulia_version = \"1.10.4\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test REPLicant._manifest_julia_version(dir) == "1.10.4"
+
+        # Resolves from a subdirectory by walking up to the enclosing project.
+        sub = joinpath(dir, "src")
+        mkpath(sub)
+        @test REPLicant._manifest_julia_version(sub) == "1.10.4"
+    end
+end
+
+@testitem "client_check_julia_version" tags = [:cli] begin
+    import REPLicant
+
+    mktempdir() do dir
+        write(joinpath(dir, "Project.toml"), "name = \"Probe\"\n")
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "julia_version = \"1.11.8\"\nmanifest_format = \"2.0\"\n",
+        )
+
+        # Mismatched major.minor against an already-installed channel: blocked,
+        # with both versions named in the message.
+        try
+            REPLicant._check_julia_version(dir, "@.", "1.12")
+            @test false
+        catch e
+            message = sprint(showerror, e)
+            @test contains(message, "pinned to Julia 1.11.8")
+            @test contains(message, "resolves to")
+        end
+
+        # Matching major.minor (patch differs from whatever 1.12 resolves to):
+        # not blocked.
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "julia_version = \"1.12.0\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test isnothing(REPLicant._check_julia_version(dir, "@.", "1.12"))
+
+        # A named/shared environment (not a literal directory or the `@.` search
+        # marker) is not a project-specific manifest this can mismatch against.
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "julia_version = \"1.11.8\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test isnothing(REPLicant._check_julia_version(dir, "@somename", "1.12"))
+    end
+end
+
+@testitem "client_start_blocks_julia_version_mismatch" tags = [:cli] begin
+    import REPLicant
+
+    # Two already-installed channels with different major.minor, so neither the
+    # version probe nor (if the guard failed to fire) a real start would trigger
+    # juliaup installing anything new.
+    probe(channel) = match(r"(\d+\.\d+\.\d+)", read(`julia +$channel --version`, String)).captures[1]
+    manifest_version = probe("1.11")
+    start_channel = "1.12"
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            mktempdir() do work
+                write(joinpath(work, "Project.toml"), "name = \"Mismatch\"\n")
+                write(
+                    joinpath(work, "Manifest.toml"),
+                    "julia_version = \"$manifest_version\"\nmanifest_format = \"2.0\"\n",
+                )
+
+                out = IOBuffer()
+                err = IOBuffer()
+                rc = nothing
+                try
+                    # The guard runs before spawning, so this never approaches the
+                    # 180s registration timeout a precompile-storm would otherwise hit.
+                    elapsed = @elapsed (
+                        rc = REPLicant.cli(
+                            ["start", "--dir=$work", "--project=$work", "--channel=$start_channel"];
+                            out, err,
+                        )
+                    )
+                    @test elapsed < 10
+                    @test rc == 1
+
+                    @test isempty(String(take!(out)))
+                    message = String(take!(err))
+                    @test contains(message, "pinned to Julia $manifest_version")
+                    @test contains(message, "resolves to")
+                finally
+                    for entry in REPLicant._read_entries()
+                        pid = tryparse(Int, entry.pid)
+                        isnothing(pid) || REPLicant._signal_process(pid, REPLicant.SIGKILL)
+                    end
+                end
+            end
+        end
+    end
+end
+
 @testitem "client_runs_script_file" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
