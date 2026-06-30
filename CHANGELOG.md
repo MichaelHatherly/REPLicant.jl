@@ -104,3 +104,4 @@ Initial Public Release
 [#40]: https://github.com/MichaelHatherly/REPLicant.jl/issues/40
 [#41]: https://github.com/MichaelHatherly/REPLicant.jl/issues/41
 [#42]: https://github.com/MichaelHatherly/REPLicant.jl/issues/42
+[#44]: https://github.com/MichaelHatherly/REPLicant.jl/issues/44

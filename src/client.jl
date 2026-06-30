@@ -450,8 +450,17 @@ end
 # silently skipped whenever the manifest's version cannot be determined. Concrete
 # `String` arguments for the same reason as `_channel_julia_version`: this is
 # `_start_server`'s private pre-flight check, always called with its own
-# already-`String` `dir`/`project`/`channel` locals.
-function _check_julia_version(dir::String, project::String, channel::String)
+# already-`String` `dir`/`project`/`channel` locals. `manifest_version_of`/
+# `channel_version_of` default to the real (subprocess-backed) lookups; tests
+# inject stubs so the version-comparison logic runs without needing a second
+# Julia channel actually installed (CI's matrix installs exactly one per job).
+# The `::Union{Nothing, String}` assertions narrow the abstract `Function`
+# callable's result back to a concrete type for everything downstream.
+function _check_julia_version(
+        dir::String, project::String, channel::String;
+        manifest_version_of::Function = _manifest_julia_version,
+        channel_version_of::Function = _channel_julia_version,
+    )
     isempty(channel) && return nothing
     search_dir = if project == "@."
         dir
@@ -460,9 +469,9 @@ function _check_julia_version(dir::String, project::String, channel::String)
     else
         isdir(project) ? project : dirname(project)
     end
-    manifest_version = _manifest_julia_version(search_dir)
+    manifest_version = manifest_version_of(search_dir)::Union{Nothing, String}
     isnothing(manifest_version) && return nothing
-    channel_version = _channel_julia_version(channel)
+    channel_version = channel_version_of(channel)::Union{Nothing, String}
     isnothing(channel_version) && return nothing
     _minor(v::String) = match(r"^(\d+\.\d+)", v).captures[1]
     _minor(manifest_version) == _minor(channel_version) && return nothing
