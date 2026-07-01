@@ -447,7 +447,10 @@ end
 #
 # Skipped for an `@`-prefixed `project` other than `@.` (a named or shared
 # environment, not a project-specific manifest this can mismatch against), and
-# silently skipped whenever the manifest's version cannot be determined. Concrete
+# silently skipped whenever the manifest's version cannot be determined or
+# parsed. Only `@.` searches ancestors; an explicit `project` names exactly the
+# environment Julia will activate, so only that path is checked, resolved
+# against `dir` (the server's working directory) when relative. Concrete
 # `String` arguments for the same reason as `_channel_julia_version`: this is
 # `_start_server`'s private pre-flight check, always called with its own
 # already-`String` `dir`/`project`/`channel` locals. `manifest_version_of`/
@@ -462,25 +465,33 @@ function _check_julia_version(
         channel_version_of::Function = _channel_julia_version,
     )
     isempty(channel) && return nothing
-    search_dir = if project == "@."
+    walk = project == "@."
+    search_dir = if walk
         dir
     elseif startswith(project, "@")
         return nothing
     else
-        isdir(project) ? project : dirname(project)
+        path = abspath(dir, project)
+        isdir(path) ? path : dirname(path)
     end
-    manifest_version = manifest_version_of(search_dir)::Union{Nothing, String}
+    manifest_version = manifest_version_of(search_dir, walk)::Union{Nothing, String}
     isnothing(manifest_version) && return nothing
     channel_version = channel_version_of(channel)::Union{Nothing, String}
     isnothing(channel_version) && return nothing
-    _minor(v::String) = match(r"^(\d+\.\d+)", v).captures[1]
-    _minor(manifest_version) == _minor(channel_version) && return nothing
+    function _minor(v::String)
+        m = match(r"^(\d+\.\d+)", v)
+        return isnothing(m) ? nothing : m.captures[1]
+    end
+    manifest_minor = _minor(manifest_version)
+    channel_minor = _minor(channel_version)
+    (isnothing(manifest_minor) || isnothing(channel_minor)) && return nothing
+    manifest_minor == channel_minor && return nothing
 
     error(
         "Manifest.toml at $search_dir is pinned to Julia $manifest_version, but " *
             "julia +$channel resolves to $channel_version. Resolve the manifest under that " *
-            "version (julia +$channel -e 'using Pkg; Pkg.resolve()') or start on the channel " *
-            "that matches the manifest.",
+            "version (julia +$channel --project=$search_dir -e 'using Pkg; Pkg.resolve()') " *
+            "or start on the channel that matches the manifest.",
     )
 end
 

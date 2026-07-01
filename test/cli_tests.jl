@@ -528,6 +528,10 @@ end
         sub = joinpath(dir, "src")
         mkpath(sub)
         @test REPLicant._manifest_julia_version(sub) == "1.10.4"
+
+        # Without walking, only the given directory itself is consulted.
+        @test isnothing(REPLicant._manifest_julia_version(sub, false))
+        @test REPLicant._manifest_julia_version(dir, false) == "1.10.4"
     end
 end
 
@@ -540,24 +544,35 @@ end
     mktempdir() do dir
         write(joinpath(dir, "Project.toml"), "name = \"Probe\"\n")
 
-        # Mismatched major.minor: blocked, with both versions named in the message.
+        # Mismatched major.minor: blocked, with both versions named in the message
+        # and a resolve hint targeting the manifest that was actually checked.
         try
             REPLicant._check_julia_version(
                 dir, "@.", "1.12";
-                manifest_version_of = _ -> "1.11.8", channel_version_of = _ -> "1.12.5",
+                manifest_version_of = (_, _) -> "1.11.8", channel_version_of = _ -> "1.12.5",
             )
             @test false
         catch e
             message = sprint(showerror, e)
             @test contains(message, "pinned to Julia 1.11.8")
             @test contains(message, "resolves to")
+            @test contains(message, "--project=$dir")
         end
 
         # Matching major.minor (patch differs): not blocked.
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@.", "1.12";
-                manifest_version_of = _ -> "1.12.0", channel_version_of = _ -> "1.12.9",
+                manifest_version_of = (_, _) -> "1.12.0", channel_version_of = _ -> "1.12.9",
+            ),
+        )
+
+        # A manifest version that doesn't parse as major.minor: silently skipped,
+        # same as a manifest whose version cannot be determined at all.
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, "@.", "1.12";
+                manifest_version_of = (_, _) -> "unknown", channel_version_of = _ -> "1.12.5",
             ),
         )
 
@@ -566,7 +581,7 @@ end
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@.", "";
-                manifest_version_of = _ -> error("should not be called"),
+                manifest_version_of = (_, _) -> error("should not be called"),
                 channel_version_of = _ -> error("should not be called"),
             ),
         )
@@ -577,10 +592,72 @@ end
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@somename", "1.12";
-                manifest_version_of = _ -> error("should not be called"),
+                manifest_version_of = (_, _) -> error("should not be called"),
                 channel_version_of = _ -> error("should not be called"),
             ),
         )
+
+        # The explicit-project cases below use the real manifest lookup so the
+        # no-walk semantics are exercised, with only the channel lookup stubbed.
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "julia_version = \"1.11.8\"\nmanifest_format = \"2.0\"\n",
+        )
+
+        # An explicit --project is activated exactly as given; no ancestor walk.
+        # A project directory without its own manifest is not blocked by an
+        # ancestor's.
+        nested = joinpath(dir, "nested")
+        mkpath(nested)
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, nested, "1.12";
+                channel_version_of = _ -> "1.12.5",
+            ),
+        )
+
+        # An explicit project directory with its own mismatched manifest: blocked.
+        write(joinpath(nested, "Project.toml"), "name = \"Nested\"\n")
+        write(
+            joinpath(nested, "Manifest.toml"),
+            "julia_version = \"1.11.8\"\nmanifest_format = \"2.0\"\n",
+        )
+        try
+            REPLicant._check_julia_version(
+                dir, nested, "1.12";
+                channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            message = sprint(showerror, e)
+            @test contains(message, "pinned to Julia 1.11.8")
+            @test contains(message, "--project=$nested")
+        end
+
+        # --project pointing at the Project.toml file checks the sibling manifest.
+        try
+            REPLicant._check_julia_version(
+                dir, joinpath(nested, "Project.toml"), "1.12";
+                channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            @test contains(sprint(showerror, e), "pinned to Julia 1.11.8")
+        end
+
+        # A relative --project resolves against --dir (the server's cwd), not the
+        # client's cwd.
+        try
+            REPLicant._check_julia_version(
+                dir, "nested", "1.12";
+                channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            message = sprint(showerror, e)
+            @test contains(message, "pinned to Julia 1.11.8")
+            @test contains(message, "--project=$nested")
+        end
     end
 end
 
@@ -605,7 +682,7 @@ end
         @test true skip = true
     else
         pair = sort(collect(by_minor); by = first)
-        manifest_channel, manifest_version = pair[1][2]
+        _, manifest_version = pair[1][2]
         start_channel, _ = pair[2][2]
 
         mktempdir() do registry
