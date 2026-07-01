@@ -506,6 +506,225 @@ end
     end
 end
 
+@testitem "client_manifest_julia_version" tags = [:cli] begin
+    import REPLicant
+
+    mktempdir() do dir
+        # No Project.toml at all: nothing to compare against.
+        @test isnothing(REPLicant._manifest_julia_version(dir))
+
+        write(joinpath(dir, "Project.toml"), "name = \"Probe\"\n")
+
+        # A Project.toml with no manifest yet (never resolved): also nothing.
+        @test isnothing(REPLicant._manifest_julia_version(dir))
+
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "# generated\njulia_version = \"1.10.4\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test REPLicant._manifest_julia_version(dir) == "1.10.4"
+
+        # Resolves from a subdirectory by walking up to the enclosing project.
+        sub = joinpath(dir, "src")
+        mkpath(sub)
+        @test REPLicant._manifest_julia_version(sub) == "1.10.4"
+
+        # Without walking, only the given directory itself is consulted.
+        @test isnothing(REPLicant._manifest_julia_version(sub, false))
+        @test REPLicant._manifest_julia_version(dir, false) == "1.10.4"
+    end
+end
+
+@testitem "client_check_julia_version" tags = [:cli] begin
+    import REPLicant
+
+    # The version lookups are stubbed (`manifest_version_of`/`channel_version_of`)
+    # so this exercises the comparison logic without needing a second Julia channel
+    # actually installed -- CI's matrix installs exactly one per job.
+    mktempdir() do dir
+        write(joinpath(dir, "Project.toml"), "name = \"Probe\"\n")
+
+        # Mismatched major.minor: blocked, with both versions named in the message
+        # and a resolve hint targeting the manifest that was actually checked.
+        try
+            REPLicant._check_julia_version(
+                dir, "@.", "1.12";
+                manifest_version_of = (_, _) -> "1.11.8", channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            message = sprint(showerror, e)
+            @test contains(message, "pinned to Julia 1.11.8")
+            @test contains(message, "resolves to")
+            @test contains(message, "--project=$dir")
+        end
+
+        # Matching major.minor (patch differs): not blocked.
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, "@.", "1.12";
+                manifest_version_of = (_, _) -> "1.12.0", channel_version_of = _ -> "1.12.9",
+            ),
+        )
+
+        # A manifest version that doesn't parse as major.minor: silently skipped,
+        # same as a manifest whose version cannot be determined at all.
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, "@.", "1.12";
+                manifest_version_of = (_, _) -> "unknown", channel_version_of = _ -> "1.12.5",
+            ),
+        )
+
+        # No --channel: skipped before either resolver runs (juliaup resolves a
+        # matching channel from the manifest on its own in that case).
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, "@.", "";
+                manifest_version_of = (_, _) -> error("should not be called"),
+                channel_version_of = _ -> error("should not be called"),
+            ),
+        )
+
+        # A named/shared environment (not a literal directory or the `@.` search
+        # marker) is not a project-specific manifest this can mismatch against;
+        # skipped before either resolver runs.
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, "@somename", "1.12";
+                manifest_version_of = (_, _) -> error("should not be called"),
+                channel_version_of = _ -> error("should not be called"),
+            ),
+        )
+
+        # The explicit-project cases below use the real manifest lookup so the
+        # no-walk semantics are exercised, with only the channel lookup stubbed.
+        write(
+            joinpath(dir, "Manifest.toml"),
+            "julia_version = \"1.11.8\"\nmanifest_format = \"2.0\"\n",
+        )
+
+        # An explicit --project is activated exactly as given; no ancestor walk.
+        # A project directory without its own manifest is not blocked by an
+        # ancestor's.
+        nested = joinpath(dir, "nested")
+        mkpath(nested)
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, nested, "1.12";
+                channel_version_of = _ -> "1.12.5",
+            ),
+        )
+
+        # An explicit project directory with its own mismatched manifest: blocked.
+        write(joinpath(nested, "Project.toml"), "name = \"Nested\"\n")
+        write(
+            joinpath(nested, "Manifest.toml"),
+            "julia_version = \"1.11.8\"\nmanifest_format = \"2.0\"\n",
+        )
+        try
+            REPLicant._check_julia_version(
+                dir, nested, "1.12";
+                channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            message = sprint(showerror, e)
+            @test contains(message, "pinned to Julia 1.11.8")
+            @test contains(message, "--project=$nested")
+        end
+
+        # --project pointing at the Project.toml file checks the sibling manifest.
+        try
+            REPLicant._check_julia_version(
+                dir, joinpath(nested, "Project.toml"), "1.12";
+                channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            @test contains(sprint(showerror, e), "pinned to Julia 1.11.8")
+        end
+
+        # A relative --project resolves against --dir (the server's cwd), not the
+        # client's cwd.
+        try
+            REPLicant._check_julia_version(
+                dir, "nested", "1.12";
+                channel_version_of = _ -> "1.12.5",
+            )
+            @test false
+        catch e
+            message = sprint(showerror, e)
+            @test contains(message, "pinned to Julia 1.11.8")
+            @test contains(message, "--project=$nested")
+        end
+    end
+end
+
+@testitem "client_start_blocks_julia_version_mismatch" tags = [:cli] begin
+    import REPLicant
+
+    # Two already-installed channels with different major.minor are needed to
+    # exercise a real mismatch through the full CLI. CI's matrix installs exactly
+    # one channel per job, so discover what's actually available and skip rather
+    # than assume "1.11"/"1.12" specifically exist (only true on a dev box with
+    # several channels installed).
+    candidates = ("1.9", "1.10", "1.11", "1.12", "1.13")
+    by_minor = Dict{String, Tuple{String, String}}()  # minor => (channel, version)
+    for c in candidates
+        v = REPLicant._channel_julia_version(c)
+        isnothing(v) && continue
+        minor = match(r"^(\d+\.\d+)", v).captures[1]
+        haskey(by_minor, minor) || (by_minor[minor] = (c, v))
+    end
+
+    if length(by_minor) < 2
+        @test true skip = true
+    else
+        pair = sort(collect(by_minor); by = first)
+        _, manifest_version = pair[1][2]
+        start_channel, _ = pair[2][2]
+
+        mktempdir() do registry
+            withenv("REPLICANT_DIR" => registry) do
+                mktempdir() do work
+                    write(joinpath(work, "Project.toml"), "name = \"Mismatch\"\n")
+                    write(
+                        joinpath(work, "Manifest.toml"),
+                        "julia_version = \"$manifest_version\"\nmanifest_format = \"2.0\"\n",
+                    )
+
+                    out = IOBuffer()
+                    err = IOBuffer()
+                    rc = nothing
+                    try
+                        # The guard runs before spawning, so this never approaches the
+                        # 180s registration timeout a precompile-storm would otherwise hit.
+                        elapsed = @elapsed (
+                            rc = REPLicant.cli(
+                                ["start", "--dir=$work", "--project=$work", "--channel=$start_channel"];
+                                out, err,
+                            )
+                        )
+                        @test elapsed < 10
+                        @test rc == 1
+
+                        @test isempty(String(take!(out)))
+                        message = String(take!(err))
+                        @test contains(message, "pinned to Julia $manifest_version")
+                        @test contains(message, "resolves to")
+                    finally
+                        for entry in REPLicant._read_entries()
+                            pid = tryparse(Int, entry.pid)
+                            isnothing(pid) || REPLicant._signal_process(pid, REPLicant.SIGKILL)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
 @testitem "client_runs_script_file" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

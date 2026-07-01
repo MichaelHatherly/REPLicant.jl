@@ -17,17 +17,19 @@ ls:
 docs binding:
     just julia "@doc {{binding}}"
 
-# Run all tests
+# Run all tests. `--dir=test` anchors `@run_package_tests`'s scan root: from a
+# `-e` request it resolves `..` against the evaluation directory, so without it
+# the scan walks the parent of wherever the session happens to be rooted.
 test-all:
-    julia +rpc -e "using TestItemRunner; @run_package_tests"
+    julia +rpc --dir=test -e "using TestItemRunner; @run_package_tests"
 
 # Run tests filtered by space-separated tags
 test-tag *tags:
-    julia +rpc -e 'using TestItemRunner; @run_package_tests filter=ti->issubset(Symbol.(split("{{tags}}")), ti.tags)'
+    julia +rpc --dir=test -e 'using TestItemRunner; @run_package_tests filter=ti->issubset(Symbol.(split("{{tags}}")), ti.tags)'
 
 # Run a single test item by name
 test-item item:
-    julia +rpc -e 'using TestItemRunner; @run_package_tests filter=ti->ti.name == "{{item}}"'
+    julia +rpc --dir=test -e 'using TestItemRunner; @run_package_tests filter=ti->ti.name == "{{item}}"'
 
 # Run Dendro code-quality analysis over REPLicant's own source (separate Julia 1.12 environment)
 dendro:
