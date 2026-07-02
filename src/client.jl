@@ -410,6 +410,91 @@ end
 # The `rpc` channel already requires juliaup, so `julia` on PATH is its launcher.
 _server_julia(channel::AbstractString) = isempty(channel) ? `julia` : `julia +$channel`
 
+# The exact Julia version `channel` resolves to, via the launcher's `--version`
+# (cheap: a juliaup/Julia startup with no project or package loading). `nothing`
+# when the launcher cannot be run (e.g. an uninstalled channel), so `start` can
+# still attempt it and surface that failure itself rather than this probe's. `channel`
+# is concrete `String` (not `AbstractString`): this is private plumbing always fed
+# `_parse_args`'s `String`-typed `channel` field, never a general-purpose entry
+# point, so there is no genericity to preserve and a concrete signature keeps JET
+# sound mode from flagging every call inside as unresolvable dynamic dispatch.
+function _channel_julia_version(channel::String)
+    out = try
+        read(`$(_server_julia(channel)) --version`, String)
+    catch
+        return nothing
+    end
+    m = match(r"(\d+\.\d+\.\d+)", out)
+    isnothing(m) && return nothing
+    capture = m.captures[1]
+    return isnothing(capture) ? nothing : String(capture)
+end
+
+# Refuse to start when an explicit `channel` is pinned to a different Julia minor
+# version than the target environment's Manifest.toml. Starting anyway activates
+# that Manifest.toml under a Julia it was never resolved for, which leaves Julia
+# silently rebuilding the whole environment's precompile cache before the server
+# can even register -- easily enough to run past `_await_entry`'s timeout and
+# look like a hang rather than the version mismatch it is. Compares major.minor
+# only: a patch difference does not force that rebuild.
+#
+# Only checked when `channel` is explicit. With no `channel`, the launcher
+# (juliaup's `julia`) already resolves a channel matching the active project's
+# manifest on its own -- confirmed by `julia --project=<dir>` reporting the
+# manifest's pinned version even though plain `julia --version` reports the
+# default channel. An explicit `+channel` is what skips that resolution and
+# forces the mismatch, so that's the only case worth guarding.
+#
+# Skipped for an `@`-prefixed `project` other than `@.` (a named or shared
+# environment, not a project-specific manifest this can mismatch against), and
+# silently skipped whenever the manifest's version cannot be determined or
+# parsed. Only `@.` searches ancestors; an explicit `project` names exactly the
+# environment Julia will activate, so only that path is checked, resolved
+# against `dir` (the server's working directory) when relative. Concrete
+# `String` arguments for the same reason as `_channel_julia_version`: this is
+# `_start_server`'s private pre-flight check, always called with its own
+# already-`String` `dir`/`project`/`channel` locals. `manifest_version_of`/
+# `channel_version_of` default to the real (subprocess-backed) lookups; tests
+# inject stubs so the version-comparison logic runs without needing a second
+# Julia channel actually installed (CI's matrix installs exactly one per job).
+# The `::Union{Nothing, String}` assertions narrow the abstract `Function`
+# callable's result back to a concrete type for everything downstream.
+function _check_julia_version(
+        dir::String, project::String, channel::String;
+        manifest_version_of::Function = _manifest_julia_version,
+        channel_version_of::Function = _channel_julia_version,
+    )
+    isempty(channel) && return nothing
+    walk = project == "@."
+    search_dir = if walk
+        dir
+    elseif startswith(project, "@")
+        return nothing
+    else
+        path = abspath(dir, project)
+        isdir(path) ? path : dirname(path)
+    end
+    manifest_version = manifest_version_of(search_dir, walk)::Union{Nothing, String}
+    isnothing(manifest_version) && return nothing
+    channel_version = channel_version_of(channel)::Union{Nothing, String}
+    isnothing(channel_version) && return nothing
+    function _minor(v::String)
+        m = match(r"^(\d+\.\d+)", v)
+        return isnothing(m) ? nothing : m.captures[1]
+    end
+    manifest_minor = _minor(manifest_version)
+    channel_minor = _minor(channel_version)
+    (isnothing(manifest_minor) || isnothing(channel_minor)) && return nothing
+    manifest_minor == channel_minor && return nothing
+
+    error(
+        "Manifest.toml at $search_dir is pinned to Julia $manifest_version, but " *
+            "julia +$channel resolves to $channel_version. Resolve the manifest under that " *
+            "version (julia +$channel --project=$search_dir -e 'using Pkg; Pkg.resolve()') " *
+            "or start on the channel that matches the manifest.",
+    )
+end
+
 # Start a server in a detached Julia process so it outlives this client. Roots it
 # at `--dir` (default the caller's directory) and `--project` (default `@.`, the
 # project of that directory), runs on `--channel` (default the launcher's default
@@ -421,6 +506,8 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     isdir(dir) || error("directory not found: $dir")
     project = isempty(parsed.project) ? "@." : parsed.project
     root = _project_root(dir)
+
+    _check_julia_version(dir, project, parsed.channel)
 
     # Refuse a name a live server in the target project already holds, so a conflict
     # fails here with a clear error rather than silently killing the detached process
