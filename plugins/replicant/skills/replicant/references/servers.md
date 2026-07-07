@@ -58,6 +58,11 @@ A server is pinned to one environment for its life. To work in a different
 environment, `start` another server for it; the selection cascade routes each
 `julia +rpc` call to the server owning its directory.
 
+A git worktree roots as its own project, separate from the main checkout it
+shares files with. A server in the main checkout does not serve its worktrees, so
+`start` one per worktree; the cascade routes each call to its own and keeps their
+sessions isolated. Claude Code's `.claude/worktrees/<name>` worktrees work this way.
+
 ## Reset a session
 
 `julia +rpc reset --module <name>` swaps a named session for a fresh, empty module,
