@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Root a server started in a git worktree at the worktree itself, not the checkout that encloses it. A worktree's `.git` is a file, not a directory, so the old directory-only check walked past it to the enclosing repository: every worktree nested under a checkout (Claude Code's default `.claude/worktrees/<name>`) took on the main project's identity and collided with it in the registry. Servers in separate worktrees now stay isolated [#45]
 - Scrub REPLicant's own eval frames from the backtrace of an error raised before any user frame (an undefined top-level binding), which previously dumped the server's internal machinery to the caller. The backtrace now matches the REPL [#42]
 - Report `julia +rpc interrupt` honestly: after scheduling the interrupt, the client confirms the server returned to idle before claiming success, and points at `kill --force` when a non-yielding eval keeps running, instead of always reporting `interrupted` [#42]
 - Give a clear error when `--port` targets a port with no live server, instead of leaking a raw connection-refused `IOError` [#42]
@@ -105,3 +106,4 @@ Initial Public Release
 [#41]: https://github.com/MichaelHatherly/REPLicant.jl/issues/41
 [#42]: https://github.com/MichaelHatherly/REPLicant.jl/issues/42
 [#44]: https://github.com/MichaelHatherly/REPLicant.jl/issues/44
+[#45]: https://github.com/MichaelHatherly/REPLicant.jl/issues/45

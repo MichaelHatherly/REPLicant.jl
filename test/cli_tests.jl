@@ -535,6 +535,24 @@ end
     end
 end
 
+@testitem "client_project_root_worktree" tags = [:cli] begin
+    import REPLicant
+
+    mktempdir() do dir
+        # A main checkout: `.git` is a directory.
+        mkdir(joinpath(dir, ".git"))
+        @test REPLicant._project_root(dir) == REPLicant._canonical(dir)
+
+        # A worktree nested inside the checkout (Claude Code's default
+        # `.claude/worktrees/<name>`): `.git` is a file, not a directory. It must
+        # root at the worktree itself, not climb to the enclosing checkout.
+        worktree = joinpath(dir, ".claude", "worktrees", "feature")
+        mkpath(worktree)
+        write(joinpath(worktree, ".git"), "gitdir: /somewhere/.git/worktrees/feature\n")
+        @test REPLicant._project_root(worktree) == REPLicant._canonical(worktree)
+    end
+end
+
 @testitem "client_check_julia_version" tags = [:cli] begin
     import REPLicant
 
