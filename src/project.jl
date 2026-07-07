@@ -3,12 +3,15 @@
 #
 
 # Root the server at the enclosing git repository, falling back to the working
-# directory. Clients select a server by matching this path (or an ancestor).
+# directory. Clients select a server by matching this path (or an ancestor). A
+# worktree's `.git` is a file (a `gitdir:` pointer), not a directory, so test for
+# the existence of `.git`, not that it is a directory: each worktree then roots at
+# itself rather than climbing to the checkout that encloses it.
 function _project_root(start::AbstractString = pwd())
     start = abspath(start)
     dir = start
     while true
-        isdir(joinpath(dir, ".git")) && return _canonical(dir)
+        ispath(joinpath(dir, ".git")) && return _canonical(dir)
         parent = dirname(dir)
         parent == dir && return _canonical(start)
         dir = parent

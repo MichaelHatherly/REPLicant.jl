@@ -30,3 +30,27 @@ EOF
 - **`references/setup.md`**: when `julia +rpc` is not installed, is not a known
   channel, or cannot reach a server. Install, link the `rpc` channel, wire
   startup.jl, self-test, troubleshoot.
+
+## Strategies
+
+Getting the most from a warm session:
+
+- **Front-load the cost, then iterate.** Load a heavy package or fixture once with
+  `using` or `include`, then keep each eval small. The session holds what you
+  loaded, so the compilation paid on the first call is free on every call after.
+  Re-`using` a package in an eval only when you changed what you import.
+- **Let Revise track your edits.** The recommended startup.jl loads Revise
+  (`setup.md`), so editing a package's source updates the running session in
+  place: change the code, re-run the call, read the new result. Restart only for a
+  change Revise cannot track, such as redefining a `struct`, or a wedged worker.
+- **Explore APIs live instead of guessing.** Evaluate an expression to see its real
+  value and type, and use `?name` or `??name` for docs (`evaluate.md`). A warm
+  session makes this cheap, so confirm a function's behavior rather than assuming
+  it.
+- **Isolate a task in its own module.** `--module <task>` keeps an experiment's
+  bindings out of `Main` and out of other tasks; `reset --module <task>` clears it
+  without restarting (`evaluate.md`). Reach for this when a scratch computation
+  would otherwise clutter the default session.
+- **Use it as a debugging feedback loop.** Define a reproduction once as a
+  function, then vary its inputs across calls without paying startup each time. A
+  fast, deterministic loop is what makes a bug tractable.
