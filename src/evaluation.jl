@@ -219,12 +219,12 @@ end
 _reject_reserved_session(name::AbstractString) =
     name == "Main" && error("Main is the default session; omit --module to use it")
 
-# The module a request evaluates into: the default session (the server's module, or
-# `Main`) when no `--module` is given, else the named session. Called by the
-# dispatcher when a request is accepted, so the eval's module is fixed before any
-# later reset can swap it.
+# The module a request evaluates into: the default session (the server's target)
+# when no `--module` is given, else the named session. Called by the dispatcher
+# when a request is accepted, so the eval's module is fixed before any later reset
+# can swap it.
 function _request_module(srv::Server, name::AbstractString)
-    isempty(name) && return @something(srv.mod, Base.active_module())
+    isempty(name) && return srv.mod()
     _reject_reserved_session(name)
     return _session_module(srv.sessions, name)
 end

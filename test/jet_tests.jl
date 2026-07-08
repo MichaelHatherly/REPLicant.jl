@@ -34,8 +34,11 @@
         # injectable `manifest_version_of`/`channel_version_of` resolvers (a test
         # seam so the version-comparison logic doesn't need a second Julia channel
         # installed) add a few more `Function`-typed-callable and keyword-NamedTuple
-        # dispatches in the same category. Threading stays inferrable: opt is 0.
-        SOUND_LIMIT = 386   # JET.report_package(REPLicant; mode = :sound)
+        # dispatches in the same category. The callable default eval target
+        # (`_default_module(::Function)` resolved per request) adds
+        # `Function`-typed-callable dispatches likewise. Threading stays
+        # inferrable: opt is 0.
+        SOUND_LIMIT = 389   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

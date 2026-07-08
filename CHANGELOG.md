@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Accept a zero-argument callable as `Server`'s default eval target, resolved per request. A host embedding a server can point it at a module it replaces over time, such as a notebook module swapped on re-init, without restarting the server [#46]
 - Refuse `julia +rpc start --channel <ver>` when the target project's `Manifest.toml` is pinned to a different Julia minor version: starting anyway silently rebuilds the whole environment's precompile cache under the wrong version before the server can register, easily running past the registration timeout and looking like a hang rather than the version mismatch it is. Resolve the manifest under that channel or start on the channel that matches it. An explicit `--project` is checked exactly as given, with a relative path resolved against `--dir`; only the default `@.` searches parent directories for the project [#44]
 - Print usage with `julia +rpc help` (also `--help` and `-h`), listing the subcommands, selectors, and per-mode flags so the surface is discoverable without the skill docs. An unrecognized argument now points at it [#42]
 - Start a server from the client with `julia +rpc start`: it launches a detached process that outlives the client and prints the port once registered, so an agent with no interactive REPL can bring up a warm session. `--dir` roots it at a directory (default the caller's), `--project` picks the environment to activate, `--name` labels it, `--channel` runs a chosen juliaup channel (default the launcher's default version). The server loads `startup.jl` like a normal warm session. Stop it with `julia +rpc kill` [#41]
@@ -107,3 +108,4 @@ Initial Public Release
 [#42]: https://github.com/MichaelHatherly/REPLicant.jl/issues/42
 [#44]: https://github.com/MichaelHatherly/REPLicant.jl/issues/44
 [#45]: https://github.com/MichaelHatherly/REPLicant.jl/issues/45
+[#46]: https://github.com/MichaelHatherly/REPLicant.jl/issues/46
