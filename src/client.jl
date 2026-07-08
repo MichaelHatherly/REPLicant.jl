@@ -166,7 +166,7 @@ end
 # aliases for the code to run.
 const VALUED_FLAGS = (
     "--port", "--project", "--name", "--timeout", "--dir", "--module", "--channel",
-    "--since", "-e", "--eval",
+    "--since", "--head-lines", "--tail-lines", "-e", "--eval",
 )
 # Flags that stand alone. `-f` is an alias for `--force`.
 const BARE_FLAGS = ("--force", "-f")
@@ -220,7 +220,12 @@ end
 function _parse_args(args::Vector{String})
     values, bare, file, script_args = _tokenize_args(args)
     port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
-    timeout = haskey(values, "--timeout") ? _parse_timeout(values["--timeout"]) : nothing
+    timeout = haskey(values, "--timeout") ?
+        _parse_number(Float64, values["--timeout"], >(0), "--timeout") : nothing
+    head_lines = haskey(values, "--head-lines") ?
+        _parse_number(Int, values["--head-lines"], >=(0), "--head-lines") : nothing
+    tail_lines = haskey(values, "--tail-lines") ?
+        _parse_number(Int, values["--tail-lines"], >=(0), "--tail-lines") : nothing
     code = get(values, "-e", get(values, "--eval", nothing))
     isnothing(file) ||
         isnothing(code) ||
@@ -237,6 +242,8 @@ function _parse_args(args::Vector{String})
         file,
         script_args,
         timeout,
+        head_lines,
+        tail_lines,
         force = !isempty(bare),
     )
 end
@@ -247,10 +254,12 @@ function _parse_port(value::AbstractString)
     return port
 end
 
-function _parse_timeout(value::AbstractString)
-    seconds = tryparse(Float64, value)
-    (isnothing(seconds) || seconds <= 0) && error("invalid --timeout: $value")
-    return seconds
+# Parse a flag value as a number of type `T`, rejecting a non-number or one the
+# `valid` predicate refuses. `label` names the flag in the error.
+function _parse_number(::Type{T}, value::AbstractString, valid, label) where {T}
+    parsed = tryparse(T, value)
+    (isnothing(parsed) || !valid(parsed)) && error("invalid $label: $value")
+    return parsed
 end
 
 # Build the code that runs a script file in the warm session. The absolute path is
@@ -286,13 +295,30 @@ function _write_payload(io::IO, payload::String)
     return nothing
 end
 
+# Keep the first `head` and last `tail` lines of `text`, eliding the middle with a
+# marker. The eval response is stdout-first, value-last, so the tail carries the value.
+# `nothing`/`nothing` (no flags) returns the text unchanged.
+function _elide(text::AbstractString, head, tail)
+    (head === nothing && tail === nothing) && return text
+    h = head === nothing ? 0 : head
+    t = tail === nothing ? 0 : tail
+    lines = split(text, '\n')
+    length(lines) <= h + t && return text
+    elided = length(lines) - h - t
+    kept = String[lines[1:h]; "…($elided lines elided)"; lines[(end - t + 1):end]]
+    return join(kept, '\n')
+end
+
 # Send an eval frame and route the response: `ok` to `out`, `err` to `err`.
 # Returns a process exit code, non-zero when the evaluation errored. `timeout_seconds`
 # bounds the wait for the result; `nothing` waits as long as the eval runs.
+# `head_lines`/`tail_lines` elide the middle of a chatty response, keeping the start
+# of a run and the tail that carries the value or error.
 function _send(
         port::Integer, code::String;
         out::IO = stdout, err::IO = stderr, timeout_seconds = nothing,
         cwd::AbstractString = "", mod::AbstractString = "",
+        head_lines::Union{Nothing, Int} = nothing, tail_lines::Union{Nothing, Int} = nothing,
     )
     sock = Sockets.connect(Sockets.localhost, port)
     try
@@ -310,11 +336,12 @@ function _send(
             )
         end
         isnothing(frame) && error("server closed the connection without a response")
+        body = _elide(frame.body, head_lines, tail_lines)
         if frame.type == RESPONSE_ERR
-            _write_payload(err, frame.body)
+            _write_payload(err, body)
             return 1
         end
-        _write_payload(out, frame.body)
+        _write_payload(out, body)
         return 0
     finally
         close(sock)
@@ -696,7 +723,9 @@ a target server and forwards code to it, taken from `-e`, from a leading `script
 positional run with `include` (trailing positionals become the script's `ARGS`),
 or, when neither is given, from stdin. The eval runs in the caller's directory
 (override with `--dir`) and in the default session unless `--module <name>` selects
-one. `--timeout <seconds>` bounds the wait for a result. Returns a process exit code.
+one. `--timeout <seconds>` bounds the wait for a result. `--head-lines`/`--tail-lines`
+elide the middle of a chatty response, keeping the start and the tail that carries the
+value. Returns a process exit code.
 """
 # Usage text for `help`/`--help`/`-h`, listing the subcommands, selectors, and the
 # per-mode flags so an agent can discover the surface without reading the skill.
@@ -723,6 +752,8 @@ Eval options:
   --dir <path>       working directory for the eval (default: caller's cwd)
   --module <name>    evaluate into a named session, isolated from the default
   --timeout <secs>   bound the wait for a result
+  --head-lines <n>   keep the first n lines of the response, eliding the middle
+  --tail-lines <n>   keep the last n lines (the value sits at the tail)
 
 Start options:
   --dir <path>       directory to serve (default: current directory)
@@ -767,7 +798,10 @@ function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
         # resolve where the agent invoked the client, not where the server started.
         cwd = isempty(parsed.dir) ? pwd() : abspath(parsed.dir)
         target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
-        return _send(target, code; out, err, timeout_seconds = parsed.timeout, cwd, mod = parsed.mod)
+        return _send(
+            target, code; out, err, timeout_seconds = parsed.timeout, cwd, mod = parsed.mod,
+            head_lines = parsed.head_lines, tail_lines = parsed.tail_lines,
+        )
     catch error
         error isa InterruptException && rethrow()
         message = error isa ErrorException ? error.msg : sprint(showerror, error)

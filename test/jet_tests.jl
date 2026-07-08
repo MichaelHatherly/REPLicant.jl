@@ -42,7 +42,11 @@
         # over the entries, `_parse_log_spec`'s NamedTuple `getfield`, the `Router`'s
         # tee of unbound output, and `RouterDisplay`'s `show` of the REPL's displayed
         # result values (over `Any`) into the log. Threading stays inferrable: opt is 0.
-        SOUND_LIMIT = 435   # JET.report_package(REPLicant; mode = :sound)
+        # Client-side output eliding (`--head-lines`/`--tail-lines`) adds the last
+        # cohort in the same category: `_parse_number`'s predicate-callable dispatch,
+        # the `head_lines`/`tail_lines` keyword-NamedTuple dispatch through `_send`,
+        # and `_elide`'s `split`/`join` over the abstract-IO response body.
+        SOUND_LIMIT = 453   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
