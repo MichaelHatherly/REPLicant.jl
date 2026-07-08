@@ -77,3 +77,39 @@ end
         @test new_count >= initial_count + 3
     end
 end
+
+@testitem "callable_default_module" setup = [Utilities] tags = [:state_persistence] begin
+    import Logging
+    import REPLicant
+    import Test
+
+    # A callable default module is resolved per request, so the host can swap
+    # the eval target between calls (e.g. a notebook module replaced on re-init).
+    mod_a = Module(:A)
+    mod_b = Module(:B)
+    target = Ref{Module}(mod_a)
+
+    mktempdir() do tmp
+        registry = mktempdir()
+        withenv("REPLICANT_DIR" => registry) do
+            cd(tmp) do
+                Logging.with_logger(Test.TestLogger()) do
+                    server = REPLicant.Server(() -> target[])
+                    port = take!(server.channel)
+                    try
+                        @test Utilities.request(port, "x = 1") == "1"
+                        @test @invokelatest isdefined(mod_a, :x)
+                        @test !@invokelatest isdefined(mod_b, :x)
+
+                        target[] = mod_b
+                        @test Utilities.request(port, "y = 2") == "2"
+                        @test @invokelatest isdefined(mod_b, :y)
+                        @test !@invokelatest isdefined(mod_a, :y)
+                    finally
+                        Utilities.wait_closed(server)
+                    end
+                end
+            end
+        end
+    end
+end

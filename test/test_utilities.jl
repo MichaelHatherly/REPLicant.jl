@@ -13,6 +13,17 @@
         return sock
     end
 
+    # Clear the process-global activity log between tests: the log outlives any one
+    # server, so items that inspect it must start from a known-empty state.
+    function reset_activity()
+        Base.@lock REPLicant.ACTIVITY_LOCK begin
+            empty!(REPLicant.ACTIVITY_LOG)
+            REPLicant.ACTIVITY_SEQ[] = 0
+            REPLicant.CURRENT_HUMAN_ENTRY[] = nothing
+        end
+        return nothing
+    end
+
     # Read one response frame: `(; type, body)`, or `nothing` on a bare disconnect.
     readframe(sock) = REPLicant._read_frame(sock, REPLicant.RESPONSE_TYPES)
 

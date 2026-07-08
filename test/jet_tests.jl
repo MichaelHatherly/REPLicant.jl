@@ -34,8 +34,19 @@
         # injectable `manifest_version_of`/`channel_version_of` resolvers (a test
         # seam so the version-comparison logic doesn't need a second Julia channel
         # installed) add a few more `Function`-typed-callable and keyword-NamedTuple
-        # dispatches in the same category. Threading stays inferrable: opt is 0.
-        SOUND_LIMIT = 386   # JET.report_package(REPLicant; mode = :sound)
+        # dispatches in the same category. The callable default eval target
+        # (`_default_target(::Base.Callable)` resolved per request) adds
+        # `Function`-typed-callable dispatches likewise. The activity log adds one
+        # more cohort in the same category: the `log` subcommand's socket IO and
+        # keyword-NamedTuple `getfield` over `out`/`err`, the render's `println`/`show`
+        # over the entries, `_parse_log_spec`'s NamedTuple `getfield`, the `Router`'s
+        # tee of unbound output, and `RouterDisplay`'s `show` of the REPL's displayed
+        # result values (over `Any`) into the log. Threading stays inferrable: opt is 0.
+        # Client-side output eliding (`--head-lines`/`--tail-lines`) adds the last
+        # cohort in the same category: `_parse_number`'s predicate-callable dispatch,
+        # the `head_lines`/`tail_lines` keyword-NamedTuple dispatch through `_send`,
+        # and `_elide`'s `split`/`join` over the abstract-IO response body.
+        SOUND_LIMIT = 453   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

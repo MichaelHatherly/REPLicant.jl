@@ -22,6 +22,75 @@
     @test_throws Exception REPLicant._parse_args(["--port=abc"])
     @test_throws Exception REPLicant._parse_args(["--port"])
     @test_throws Exception REPLicant._parse_args(["--bogus"])
+
+    # Line-eliding flags parse to Ints; unset is nothing.
+    lines = REPLicant._parse_args(["--head-lines", "5", "--tail-lines", "5", "-e", "x"])
+    @test lines.head_lines == 5
+    @test lines.tail_lines == 5
+    @test isnothing(basic.head_lines)
+    @test isnothing(basic.tail_lines)
+    @test_throws Exception REPLicant._parse_args(["--head-lines=abc"])
+    @test_throws Exception REPLicant._parse_args(["--tail-lines=-1"])
+end
+
+@testitem "client_elide" tags = [:cli] begin
+    import REPLicant
+
+    text = join(string.(1:10), '\n')
+
+    # No flags: unchanged.
+    @test REPLicant._elide(text, nothing, nothing) == text
+
+    # Text no longer than head+tail: returned whole, no marker.
+    @test REPLicant._elide(text, 5, 5) == text
+    @test REPLicant._elide(text, 10, nothing) == text
+
+    # Head+tail keeps the ends, elides the middle with the right count.
+    both = REPLicant._elide(text, 2, 2)
+    @test startswith(both, "1\n2\n")
+    @test contains(both, "…(6 lines elided)")
+    @test endswith(both, "9\n10")
+
+    # Tail-only preserves the value at the tail.
+    tail = REPLicant._elide(text, nothing, 3)
+    @test contains(tail, "…(7 lines elided)")
+    @test endswith(tail, "8\n9\n10")
+    @test !contains(tail, "1\n2")
+
+    # Head-only keeps the start, drops the value (the caller's choice).
+    head = REPLicant._elide(text, 3, nothing)
+    @test startswith(head, "1\n2\n3\n")
+    @test contains(head, "…(7 lines elided)")
+    @test !contains(head, "10")
+end
+
+@testitem "client_elide_end_to_end" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        code = "for i in 1:100; println(i); end"
+
+        # --tail-lines keeps the end (the value/last output), elides the middle.
+        out = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--tail-lines=3", "-e", code]; out) == 0
+        tail = String(take!(out))
+        @test contains(tail, "100")
+        @test contains(tail, "lines elided")
+        @test !contains(tail, "1\n2\n")
+
+        # --head-lines keeps the start.
+        @test REPLicant.cli(["--port=$port", "--head-lines=2", "-e", code]; out) == 0
+        head = String(take!(out))
+        @test startswith(head, "1\n2\n")
+        @test contains(head, "lines elided")
+
+        # No flags: the full output is unchanged.
+        @test REPLicant.cli(["--port=$port", "-e", code]; out) == 0
+        full = String(take!(out))
+        @test contains(full, "1\n2\n")
+        @test contains(full, "100")
+        @test !contains(full, "elided")
+    end
 end
 
 @testitem "help_prints_usage" tags = [:cli] begin

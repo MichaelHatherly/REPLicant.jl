@@ -115,4 +115,61 @@ function REPLicant.__notify_busy(::Nothing)
     return nothing
 end
 
+#
+# Activity log: capture human-typed input into the log, so an agent sharing the
+# session sees what was run at the prompt.
+#
+
+const REPL_TRANSFORM_INSTALLED = Ref(false)
+
+# Reproduce the human's typed code from the parsed expression. `ast_transforms` never
+# sees the raw source, so deparse: strip line-number nodes and print. Normalized
+# (comments and exact spacing are lost), faithful to what ran. Deep-copy before
+# stripping so the expression the REPL is about to evaluate is left untouched.
+function _deparse(@nospecialize ast)
+    ast isa Expr || return string(ast)
+    stripped = Base.remove_linenums!(deepcopy(ast))
+    # `remove_linenums!` clears line nodes inside blocks but leaves those sitting
+    # directly in a `:toplevel` (multi-statement input), so drop them here.
+    stripped.head === :toplevel && return join(
+        (string(arg) for arg in stripped.args if !(arg isa LineNumberNode)), '\n',
+    )
+    return string(stripped)
+end
+
+# An identity AST transform: it records the typed line into the activity log, then
+# returns its input unchanged so evaluation is unaffected. It never throws into the
+# REPL. Runs on the REPL backend task, before the line evaluates.
+function _repl_input_transform(@nospecialize ast)
+    try
+        REPLicant._record_repl_input(_deparse(ast))
+    catch  # dendro-ignore: empty_catch -- a logging failure must never disturb the human's REPL
+    end
+    return ast
+end
+
+# Push the transform once. Onto the live backend when it exists, else onto the
+# template `REPLBackend` copies at startup, covering both boot orders (server from
+# startup.jl before the backend, or loaded into a running REPL). `pushfirst!` so it
+# observes the raw parsed expression before `softscope` wraps it.
+function _push_repl_transform()
+    REPL_TRANSFORM_INSTALLED[] && return nothing
+    if isdefined(Base, :active_repl_backend) && Base.active_repl_backend !== nothing
+        pushfirst!(Base.active_repl_backend.ast_transforms, _repl_input_transform)
+    else
+        pushfirst!(REPL.repl_ast_transforms, _repl_input_transform)
+    end
+    REPL_TRANSFORM_INSTALLED[] = true
+    return nothing
+end
+
+function REPLicant.__install_activity_capture(::Nothing)
+    # atreplinit runs before `REPLBackend()` copies the transform template, so a
+    # transform pushed there is inherited by the backend. The direct push covers the
+    # case where the backend already exists.
+    atreplinit(_ -> _push_repl_transform())
+    _push_repl_transform()
+    return nothing
+end
+
 end

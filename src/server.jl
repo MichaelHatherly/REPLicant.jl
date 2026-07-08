@@ -12,13 +12,17 @@ end
 SessionStore() = SessionStore(ReentrantLock(), Dict{String, Module}())
 
 """
-    Server(; max_connections = 100, read_timeout_seconds = 30.0, save = false, verbose = false)
+    Server([mod]; max_connections = 100, read_timeout_seconds = 30.0, save = false, verbose = false)
 
 Start a persistent Julia REPL server on a TCP socket. It picks a free port from
 8000, registers itself in the registry (see [`install_channel`](@ref)), and
 evaluates code from clients until closed.
 
 # Arguments
+- `mod`: the default eval target. A `Module` evaluates every default-session
+  request there; a zero-argument callable returning a module is resolved per
+  request, so the host can swap the target between calls. Omitted, requests
+  evaluate into the active module.
 - `max_connections::Int = 100`: concurrent connections before new ones are rejected.
 - `read_timeout_seconds::Float64 = 30.0`: per-request read timeout in seconds.
 - `save::Bool = false`: record the handle so [`server`](@ref) returns it. Use it
@@ -53,7 +57,11 @@ At capacity, clients get an `err` frame carrying "Server at capacity, please ret
 mutable struct Server
     task::Task
     channel::Channel{Int}
-    mod::Union{Module, Nothing}
+    # Resolves the default eval target on each request. A fixed module and the
+    # active-module fallback are normalized to zero-argument callables at
+    # construction, so a host can equally hand in its own callable to swap the
+    # target between calls.
+    mod::Base.Callable
     max_connections::Int
     read_timeout_seconds::Float64
     save::Bool
@@ -86,7 +94,7 @@ mutable struct Server
         )
         srv = new()
         srv.channel = Channel{Int}(1)
-        srv.mod = mod
+        srv.mod = _default_target(mod)
         srv.max_connections = max_connections
         srv.read_timeout_seconds = read_timeout_seconds
         srv.save = save
@@ -108,6 +116,15 @@ mutable struct Server
         return srv
     end
 end
+
+# Normalize the constructor's default-target argument to a zero-argument callable
+# resolved per request. A `Module` is fixed; `nothing` defers to the active module; a
+# host's own callable can swap the target between calls (e.g. a notebook module
+# replaced on re-init). Resolved by `_request_module` when a default-session request
+# is accepted.
+_default_target(mod::Module) = () -> mod
+_default_target(::Nothing) = Base.active_module
+_default_target(f::Base.Callable) = f
 
 # The server running in this process, recorded at construction. `nothing` when
 # none runs here. `label!` reads it; `server()` returns it only when `save`.
@@ -170,6 +187,8 @@ function _server(srv::Server)
     # Route output per eval so a remote eval's output is captured while the
     # interactive REPL's still reaches the terminal.
     _install_routing!()
+    # Capture human-typed activity into the log (a no-op without an interactive REPL).
+    _install_activity_capture()
     # Signal readiness now that the registry entry exists.
     put!(srv.channel, port_number)
     return _serve(server, srv, entry_path)
@@ -407,6 +426,11 @@ function _dispatch(
             # a clean module; an eval already in flight finishes in the old one.
             _write_frame(sock, RESPONSE_OK, _reset_session(srv, frame.body))
             srv.verbose && @info "Answered reset" id name = frame.body
+        elseif frame.type == REQUEST_LOG
+            # Log is answered off the worker queue too, so the agent can read recent
+            # activity while a long eval is still running.
+            _write_frame(sock, RESPONSE_OK, _render_activity_log(frame.body))
+            srv.verbose && @info "Answered log" id
         else
             decoded = _decode_eval_body(frame.body)
             # Resolve the target module now, while accepting the request, so a later
