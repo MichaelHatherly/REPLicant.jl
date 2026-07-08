@@ -9,11 +9,12 @@
 #   length   UInt32 (BE)  4 bytes  body byte count
 #   body     length bytes          UTF-8
 #
-# Request types are `eval`/`ping`/`interrupt`/`reset`, response types
+# Request types are `eval`/`ping`/`interrupt`/`reset`/`log`, response types
 # `ok`/`err`/`pong`. An `eval` body is structured (see `_encode_eval_body`); the
-# others are a name or empty. The type code is an open enum: new response codes (a
-# serialized value, a MIME bundle) extend the protocol without a format break. Every
-# read validates magic, version, type, and length before trusting the body.
+# others are a name, a count, or empty. The type code is an open enum: new codes (a
+# `log` query, a serialized value, a MIME bundle) extend the protocol without a
+# format break. Every read validates magic, version, type, and length before
+# trusting the body.
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
@@ -36,11 +37,12 @@ const REQUEST_EVAL = 0x01
 const REQUEST_PING = 0x02
 const REQUEST_INTERRUPT = 0x03
 const REQUEST_RESET = 0x04
+const REQUEST_LOG = 0x05
 const RESPONSE_OK = 0x01
 const RESPONSE_ERR = 0x02
 const RESPONSE_PONG = 0x03
 
-const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING, REQUEST_INTERRUPT, REQUEST_RESET)
+const REQUEST_TYPES = (REQUEST_EVAL, REQUEST_PING, REQUEST_INTERRUPT, REQUEST_RESET, REQUEST_LOG)
 const RESPONSE_TYPES = (RESPONSE_OK, RESPONSE_ERR, RESPONSE_PONG)
 
 # An eval frame body carries the caller's working directory and target module name

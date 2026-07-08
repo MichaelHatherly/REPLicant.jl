@@ -37,8 +37,17 @@ end
 _routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
 Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
-Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt) = unsafe_write(_routed(r), p, n)
-Base.write(r::Router, b::UInt8) = write(_routed(r), b)
+# When no capture target is bound, the write is the interactive REPL's, so it also
+# feeds the activity log's open human entry. A bound target is an agent eval, already
+# captured into its own pipe, so it never tees here.
+function Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt)
+    CAPTURE_TARGET[] === nothing && _tee_human(p, n)
+    return unsafe_write(_routed(r), p, n)
+end
+function Base.write(r::Router, b::UInt8)
+    CAPTURE_TARGET[] === nothing && _tee_human(b)
+    return write(_routed(r), b)
+end
 Base.flush(r::Router) = flush(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
 Base.get(r::Router, key::Symbol, default) = get(_routed(r), key, default)
 Base.displaysize(r::Router) = displaysize(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
@@ -50,7 +59,12 @@ struct RouterDisplay <: Base.AbstractDisplay end
 
 function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
     target = CAPTURE_TARGET[]
-    target === nothing && throw(MethodError(display, (d, M, x)))
+    if target === nothing
+        # No eval bound: the REPL is displaying a human result. Tee it into the open
+        # activity entry, then decline so the REPL's own display still shows it.
+        _tee_human_display(x)
+        throw(MethodError(display, (d, M, x)))
+    end
     return show(target, M, x)
 end
 Base.display(d::RouterDisplay, x) = display(d, MIME"text/plain"(), x)
@@ -367,7 +381,12 @@ __notify_busy(::Any) = nothing
 function _evaluate_request(code::AbstractString, id::Integer, mod::Module, dir::AbstractString)
     _notify_busy(1)
     return try
-        _evaluate(code, id, mod, dir)
+        result = _evaluate(code, id, mod, dir)
+        # Record here, the single choke point for agent evals: it covers help queries
+        # (which `_evaluate` early-returns) and normal evals, while pings, interrupts,
+        # resets, and log requests never reach it, so the log carries no probe noise.
+        _record_activity(:socket, code, result.output, result.errored)
+        result
     finally
         _notify_busy(-1)
     end

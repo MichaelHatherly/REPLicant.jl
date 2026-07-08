@@ -166,7 +166,7 @@ end
 # aliases for the code to run.
 const VALUED_FLAGS = (
     "--port", "--project", "--name", "--timeout", "--dir", "--module", "--channel",
-    "-e", "--eval",
+    "--since", "-e", "--eval",
 )
 # Flags that stand alone. `-f` is an alias for `--force`.
 const BARE_FLAGS = ("--force", "-f")
@@ -232,6 +232,7 @@ function _parse_args(args::Vector{String})
         dir = get(values, "--dir", ""),
         mod = get(values, "--module", ""),
         channel = get(values, "--channel", ""),
+        since = get(values, "--since", ""),
         code,
         file,
         script_args,
@@ -600,6 +601,38 @@ function _reset_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     end
 end
 
+# Show recent shared-session activity: what the human typed at the prompt and what an
+# agent evaluated over the socket, with captured output. A leading positional integer
+# caps the count; `--since <id>` returns only entries past that sequence number, for
+# incremental catchup. Read-only, answered off the worker queue, so a busy server
+# still replies.
+function _log_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
+    rest = args
+    count = ""
+    if !isempty(rest) && !isempty(rest[1]) && all(isdigit, rest[1])
+        count = rest[1]
+        rest = rest[2:end]
+    end
+    parsed = _parse_args(rest)
+    body = isempty(parsed.since) ? count : "since=$(parsed.since)"
+    target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
+    sock = Sockets.connect(Sockets.localhost, target)
+    try
+        _write_frame(sock, REQUEST_LOG, body)
+        frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
+        isnothing(frame) && error("server closed the connection without a response")
+        if frame.type == RESPONSE_ERR
+            println(err, "replicant: $(frame.body)")
+            return 1
+        end
+        print(out, frame.body)
+        endswith(frame.body, '\n') || println(out)
+        return 0
+    finally
+        close(sock)
+    end
+end
+
 # Poll a server until it reports idle, or the budget elapses. Pings are answered
 # off the worker queue, so a busy worker still pongs (an empty marker means idle).
 # Returns whether the server reached idle.
@@ -656,7 +689,9 @@ leading `start` launches a detached server (`--dir`/`--project`/`--name`/`--chan
 leading `kill` terminates a resolved server (`--force` for SIGKILL); a leading
 `interrupt` frees a server wedged on a running eval, scheduling an
 `InterruptException` onto it without killing the process (`kill` stays the hard
-tier); a leading `reset` clears a named session (`--module`). Otherwise it resolves
+tier); a leading `reset` clears a named session (`--module`); a leading `log` prints
+recent shared-session activity (`[N]` caps the count, `--since <id>` returns only
+newer entries). Otherwise it resolves
 a target server and forwards code to it, taken from `-e`, from a leading `script.jl`
 positional run with `include` (trailing positionals become the script's `ARGS`),
 or, when neither is given, from stdin. The eval runs in the caller's directory
@@ -675,6 +710,7 @@ Usage:
   julia +rpc kill [selectors] [-f]     stop a server (-f/--force sends SIGKILL)
   julia +rpc interrupt [selectors]     free a server wedged on a running eval
   julia +rpc reset --module <name>     clear a named session
+  julia +rpc log [N] [selectors]       show recent session activity (--since <id> for new only)
   julia +rpc help                      show this message
 
 Selectors:
@@ -709,6 +745,7 @@ function _run_subcommand(args::Vector{String}, out::IO, err::IO)
     command == "kill" && return _kill_server(rest; out)
     command == "interrupt" && return _interrupt_server(rest; out, err)
     command == "reset" && return _reset_server(rest; out, err)
+    command == "log" && return _log_server(rest; out, err)
     return nothing
 end
 

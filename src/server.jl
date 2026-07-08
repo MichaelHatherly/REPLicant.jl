@@ -187,6 +187,8 @@ function _server(srv::Server)
     # Route output per eval so a remote eval's output is captured while the
     # interactive REPL's still reaches the terminal.
     _install_routing!()
+    # Capture human-typed activity into the log (a no-op without an interactive REPL).
+    _install_activity_capture()
     # Signal readiness now that the registry entry exists.
     put!(srv.channel, port_number)
     return _serve(server, srv, entry_path)
@@ -424,6 +426,11 @@ function _dispatch(
             # a clean module; an eval already in flight finishes in the old one.
             _write_frame(sock, RESPONSE_OK, _reset_session(srv, frame.body))
             srv.verbose && @info "Answered reset" id name = frame.body
+        elseif frame.type == REQUEST_LOG
+            # Log is answered off the worker queue too, so the agent can read recent
+            # activity while a long eval is still running.
+            _write_frame(sock, RESPONSE_OK, _render_activity_log(frame.body))
+            srv.verbose && @info "Answered log" id
         else
             decoded = _decode_eval_body(frame.body)
             # Resolve the target module now, while accepting the request, so a later
