@@ -116,6 +116,49 @@ function REPLicant.__notify_busy(::Nothing)
 end
 
 #
+# Footer: rebind Ctrl-L, which would otherwise wipe the reserved rows.
+#
+# The REPL binds it to erasing the whole screen, and erase-in-display ignores the
+# scrolling region, so the footer goes with it and a footer nothing is currently
+# updating never comes back. What Ctrl-L is for is clearing the scrollback out of
+# the way, so the replacement clears the scrolling region and leaves the reserved
+# rows alone. Nothing is erased, so there is no flash to repair. With the footer
+# disabled it reserves nothing and clears the whole screen, as the original did.
+#
+
+const FOOTER_KEYS_INSTALLED = Ref(false)
+
+function _clear_scrolling_region(state, rest...)
+    terminal = LineEdit.terminal(state)
+    try
+        write(terminal, REPLicant.Footers.clear_screen_sequence())
+    catch error
+        @debug "Footer clear failed" exception = (error, catch_backtrace())
+        REPL.Terminals.clear(terminal)
+    end
+    LineEdit.refresh_line(state)
+    return nothing
+end
+
+# Called from the footer's upkeep until it takes: the footer can be enabled from
+# `startup.jl`, before the REPL has built the keymaps this patches.
+function REPLicant.Footers.__install_keys(::Nothing)
+    FOOTER_KEYS_INSTALLED[] && return true
+    (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return false
+    repl = Base.active_repl
+    isdefined(repl, :interface) || return false
+    for mode in repl.interface.modes
+        if hasproperty(mode, :keymap_dict) && mode.keymap_dict isa Dict{Char, Any}
+            LineEdit.add_nested_key!(
+                mode.keymap_dict, '\x0c', _clear_scrolling_region; override = true
+            )
+        end
+    end
+    FOOTER_KEYS_INSTALLED[] = true
+    return true
+end
+
+#
 # Activity log: capture human-typed input into the log, so an agent sharing the
 # session sees what was run at the prompt.
 #

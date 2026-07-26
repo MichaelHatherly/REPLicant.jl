@@ -182,18 +182,33 @@ function _parse_log_spec(spec::AbstractString)
     return (; kind = :last, value = something(tryparse(Int, spec), DEFAULT_LOG_ENTRIES))
 end
 
-# Render recent activity for a `log` reply. Snapshots under the lock, including the
-# still-open human entry so the agent sees the human's latest line even before the
-# next prompt. Ordered by `seq`: a human entry that stayed open across an agent eval
-# lands out of push order, so sort restores the sequence the numbers imply.
+# Every entry, oldest first, including the still-open human entry so a reader sees
+# the human's latest line even before the next prompt. Ordered by `seq`: a human
+# entry that stayed open across an agent eval lands out of push order, so sort
+# restores the sequence the numbers imply. Caller holds `ACTIVITY_LOCK`.
+function _snapshot_entries()
+    entries = copy(ACTIVITY_LOG)
+    open = CURRENT_HUMAN_ENTRY[]
+    open === nothing ||
+        push!(entries, LogEntry(open.seq, :repl, open.time, open.code, _valid_prefix(open.out), false))
+    sort!(entries; by = entry -> entry.seq)
+    return entries
+end
+
+# The last `n` entries, oldest first. For the footer, which shows a glance of what
+# just ran rather than the transcript a `log` request renders.
+function _recent_activity(n::Integer)
+    return Base.@lock ACTIVITY_LOCK begin
+        entries = _snapshot_entries()
+        entries[(end - clamp(n, 0, length(entries)) + 1):end]
+    end
+end
+
+# Render recent activity for a `log` reply.
 function _render_activity_log(spec::AbstractString)
     parsed = _parse_log_spec(spec)
     Base.@lock ACTIVITY_LOCK begin
-        entries = copy(ACTIVITY_LOG)
-        open = CURRENT_HUMAN_ENTRY[]
-        open === nothing ||
-            push!(entries, LogEntry(open.seq, :repl, open.time, open.code, _valid_prefix(open.out), false))
-        sort!(entries; by = entry -> entry.seq)
+        entries = _snapshot_entries()
         total = length(entries)
         window = if parsed.kind === :since
             filter(entry -> entry.seq > parsed.value, entries)

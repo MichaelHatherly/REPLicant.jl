@@ -152,6 +152,37 @@ close(REPLicant.server()) # stop it
 
 Showing the handle reports port, project, name, start time, and limits.
 
+### Pin status to the bottom of the terminal
+
+```julia
+REPLicant.footer!()
+```
+
+The bottom rows of the terminal show the server's status and the last few things
+the session ran, from the prompt and over the socket alike:
+
+```
+#12 socket 14:03:21  using DataFrames
+#13 repl 14:03:44  describe(df)
+REPLicant  main  :8004  MyProject  up 12m  busy 3s
+```
+
+Those rows are taken out of the terminal's scrolling region rather than printed,
+so the prompt keeps working and ordinary output scrolls underneath them.
+
+The status row carries the server's label, port, project, and uptime, and whether
+it is evaluating something right now, counting up for as long as it is. That last
+field is what tells a long computation from a wedged one.
+
+- `entries` sets how many activity rows to show: 3 by default, `0` for the status
+  row alone. They are the same entries `julia +rpc log` renders in full.
+- `footer!(false)` hands the rows back.
+
+Ctrl-L clears the screen above the footer and leaves the footer alone. Call
+`footer!()` from startup.jl alongside the server, or at the prompt at any time.
+With output piped or redirected there is no terminal to draw on, and it returns
+`false` without drawing.
+
 ### Stop a server
 
 ```julia

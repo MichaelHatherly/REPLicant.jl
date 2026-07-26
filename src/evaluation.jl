@@ -372,6 +372,9 @@ end
 function _notify_busy(delta::Int)
     Threads.atomic_add!(REMOTE_EVAL_DEPTH, delta)
     __notify_busy(nothing)
+    # Both edges of an evaluation change what the footer's status row says, and an
+    # eval that finishes quickly would otherwise never be seen to have started.
+    Footers.update!()
     return nothing
 end
 __notify_busy(::Any) = nothing
