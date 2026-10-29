@@ -77,6 +77,9 @@ end
         @test timedwait(() -> !isnothing(server.busy_since), 5.0) === :ok
         @test server.busy_code == "sleep(1); :slept"
         wait(running)
+        # The reply reaches the client before the worker clears its busy state, so
+        # wait for that, or it lands on the state set by hand below.
+        @test timedwait(() -> isnothing(server.busy_since), 5.0) === :ok
 
         now = Dates.now()
         server.busy_since = now - Dates.Second(2)
