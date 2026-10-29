@@ -88,17 +88,26 @@ function _one_line(code::AbstractString)
     return string(rstrip(text[1:prevind(text, stop)]), " …")
 end
 
-function _activity_row(entry::LogEntry)
-    seq = _colored(entry.errored ? ERROR_COLOR : DIM, "#$(entry.seq)")
-    source = _colored(entry.source === :repl ? REPL_COLOR : SOCKET_COLOR, entry.source)
+_seq_label(entry::LogEntry) = "#$(entry.seq)"
+
+# Padded before colouring, since the escape codes would count toward the width.
+function _activity_row(entry::LogEntry, seq_width::Integer)
+    seq = _colored(entry.errored ? ERROR_COLOR : DIM, rpad(_seq_label(entry), seq_width))
+    source = _colored(entry.source === :repl ? REPL_COLOR : SOCKET_COLOR, rpad(entry.source, SOURCE_WIDTH))
     time = _dim(Dates.format(entry.time, "HH:MM:SS"))
     return string(seq, " ", source, " ", time, "  ", _one_line(entry.code))
 end
 
+# Wide enough for either source, `:repl` or `:socket`.
+const SOURCE_WIDTH = length("socket")
+
 # The footer's activity tail: one row per entry, oldest first, so the newest sits
-# closest to the prompt.
-_render_activity(entries::AbstractVector{LogEntry}, ::Integer) =
-    join((_activity_row(entry) for entry in entries), '\n')
+# closest to the prompt and carries the widest sequence number.
+function _render_activity(entries::Vector{LogEntry}, ::Integer)
+    isempty(entries) && return ""
+    seq_width = length(_seq_label(last(entries)))
+    return join((_activity_row(entry, seq_width) for entry in entries), '\n')
+end
 
 # The footer draws on the real terminal rather than through the routing streams: a
 # write to a router with no capture bound is taken for the human's own output and

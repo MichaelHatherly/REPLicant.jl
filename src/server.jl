@@ -320,7 +320,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                             end
                         end
                     end
-                    srv.busy_since = Dates.now()
+                    _set_busy!(srv, Dates.now())
                     srv.interrupt_signal = signal
                     try
                         wait(eval_task)
@@ -331,7 +331,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                         @error "Eval task failed" id = request.id error
                     finally
                         srv.interrupt_signal = nothing
-                        srv.busy_since = nothing
+                        _set_busy!(srv, nothing)
                         notify(signal)
                         wait(watcher)
                         # Always decrement counter when done with a connection
@@ -386,6 +386,13 @@ end
 # The pong body: the worker's busy-since timestamp, or empty when idle. Clients
 # render it in `ls` to tell a wedged server from an idle one.
 _busy_marker(srv::Server) = isnothing(srv.busy_since) ? "" : string(srv.busy_since)
+
+# The footer's status row reads `busy_since`, so each change to it asks for a repaint.
+function _set_busy!(srv::Server, since::Union{Dates.DateTime, Nothing})
+    srv.busy_since = since
+    Footers.update!()
+    return nothing
+end
 
 # Request an interrupt of the running eval, freeing a wedged worker without killing
 # the process. Returns whether an eval was running to interrupt. Called from the

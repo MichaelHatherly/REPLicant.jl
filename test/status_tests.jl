@@ -96,6 +96,23 @@ end
     @test length(split(REPLicant._render_activity(REPLicant._recent_activity(2), 80), '\n')) == 2
 end
 
+@testitem "activity_tail_aligns_its_columns" tags = [:footer] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.reset_activity()
+    # Start below a digit boundary, so the sequence numbers differ in width.
+    REPLicant.ACTIVITY_SEQ[] = 8
+    REPLicant._record_activity(:socket, "a = 1", "1", false)
+    REPLicant._record_repl_input("b = 2")
+
+    rows = split(REPLicant._render_activity(REPLicant._recent_activity(2), 80), '\n')
+    plain = [replace(row, r"\e\[[0-9;]*m" => "") for row in rows]
+    @test startswith(plain[1], "#9 ")
+    @test startswith(plain[2], "#10 ")
+    # Sequence, source, and time are padded, so the code starts in one column.
+    @test findfirst("a = 1", plain[1]) == findfirst("b = 2", plain[2])
+end
+
 @testitem "activity_tail_takes_one_row_per_entry" tags = [:footer] setup = [Utilities] begin
     import REPLicant
 
@@ -126,4 +143,40 @@ end
     # Asking for more than there is gives what there is.
     @test length(REPLicant._recent_activity(100)) == 2
     @test isempty(REPLicant._recent_activity(0))
+end
+
+@testitem "footer_repaints_once_the_server_is_idle" tags = [:footer] setup = [Utilities] begin
+    import REPLicant
+
+    footer = REPLicant.Footers.FOOTER
+    # A private wake event, so a live footer in the session running the tests does
+    # not take the repaint requests this item is counting.
+    live_wake = footer.wake
+    wake = footer.wake = Base.Event(true)
+    try
+        Utilities.withserver() do server, mod, port
+            # Stand in for the footer's dispatch task: on every repaint request,
+            # note what the status row would read.
+            seen = Any[]
+            done = Ref(false)
+            watcher = @async while true
+                wait(wake)
+                done[] && break
+                push!(seen, server.busy_since)
+            end
+
+            @test Utilities.request(port, "sleep(0.2); :slept") == ":slept"
+            @test timedwait(() -> isnothing(server.busy_since), 5.0) === :ok
+            yield()
+            done[] = true
+            notify(wake)
+            wait(watcher)
+
+            # Without a repaint after the worker goes idle, the row keeps saying
+            # busy until the next idle repaint, up to 30s later.
+            @test isnothing(last(seen))
+        end
+    finally
+        footer.wake = live_wake
+    end
 end
