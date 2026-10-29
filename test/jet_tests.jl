@@ -52,8 +52,9 @@
         # `Any` and renders it through `invokelatest`, and every row of drawing is
         # `write`/`string` over abstract IO. The status row's reads of the server
         # handle's `Union`-typed runtime details add the `getfield` remainder. The
-        # request token check reads the frame over abstract IO like `_read_frame`.
-        SOUND_LIMIT = 698   # JET.report_package(REPLicant; mode = :sound)
+        # request token adds a keyword to the registry writers and an `Unauthorized`
+        # branch to `_reply_error`'s test of an `Any`-typed error.
+        SOUND_LIMIT = 701   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
