@@ -59,8 +59,10 @@
         # the result's typeassert after the `__revise` extension point. The footer's
         # upkeep reaches the REPL extension's key binding through `invokelatest`,
         # which may throw. `kill` reporting a surviving process adds an `err`
-        # keyword's `getfield`.
-        SOUND_LIMIT = 703   # JET.report_package(REPLicant; mode = :sound)
+        # keyword's `getfield`. Rejecting a request for its content adds the
+        # `RequestError` constructor's field `convert` and its `@debug` log's
+        # `shouldlog` pair.
+        SOUND_LIMIT = 706   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
