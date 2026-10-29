@@ -185,6 +185,9 @@ end
             Utilities.spawn_server(registry, work) do port, pid
                 err = IOBuffer()
                 withenv("REPLICANT_DIR" => registry) do
+                    # The entry is written before a cold subprocess can answer a
+                    # ping, and `cli` checks the port with one before it sends.
+                    @test timedwait(() -> REPLicant._ping(port), 60.0) === :ok
                     @test REPLicant.cli(["--port=$port", "-e", "exit(3)"]; err) == 1
                 end
                 @test contains(String(take!(err)), "the server exited during the eval")
