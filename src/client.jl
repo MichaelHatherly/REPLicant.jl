@@ -297,12 +297,16 @@ end
 # `nothing`/`nothing` (no flags) returns the text unchanged.
 function _elide(text::AbstractString, head, tail)
     (head === nothing && tail === nothing) && return text
-    h = head === nothing ? 0 : head
-    t = tail === nothing ? 0 : tail
+    h::Int = something(head, 0)
+    t::Int = something(tail, 0)
     lines = split(text, '\n')
+    # A trailing newline closes the last line; it does not start another.
+    closed = isempty(last(lines))
+    closed && pop!(lines)
     length(lines) <= h + t && return text
     elided = length(lines) - h - t
     kept = String[lines[1:h]; "…($elided lines elided)"; lines[(end - t + 1):end]]
+    closed && push!(kept, "")
     return join(kept, '\n')
 end
 

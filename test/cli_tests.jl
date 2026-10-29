@@ -876,3 +876,13 @@ end
         @test strip(String(take!(out))) == "7"
     end
 end
+
+@testitem "client_elide_trailing_newline" tags = [:cli] begin
+    import REPLicant
+
+    # Printed output ends in a newline, which closes the last line rather than
+    # starting another.
+    text = "1\n2\n3\n4\n5\n"
+    @test REPLicant._elide(text, nothing, 2) == "…(3 lines elided)\n4\n5\n"
+    @test REPLicant._elide(text, 5, nothing) == text
+end
