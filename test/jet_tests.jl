@@ -45,8 +45,10 @@
         # Client-side output eliding (`--head-lines`/`--tail-lines`) adds the last
         # cohort in the same category: `_parse_number`'s predicate-callable dispatch,
         # the `head_lines`/`tail_lines` keyword-NamedTuple dispatch through `_send`,
-        # and `_elide`'s `split`/`join` over the abstract-IO response body.
-        SOUND_LIMIT = 367   # JET.report_package(REPLicant; mode = :sound)
+        # and `_elide`'s `split`/`join` over the abstract-IO response body. Logging a
+        # foreign peer at debug adds the log macro's `shouldlog` pair, and the
+        # `UnknownProtocol` constructor its field `convert`.
+        SOUND_LIMIT = 370  # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

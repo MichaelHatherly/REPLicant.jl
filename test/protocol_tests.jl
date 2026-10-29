@@ -287,6 +287,35 @@ end
     end
 end
 
+@testitem "foreign_protocol_not_logged_as_error" tags = [:protocol] setup = [Utilities] begin
+    import Logging
+    import Sockets
+    import Test
+
+    # Other tools on the machine probe localhost ports (an HTTP health check, say).
+    # Such a peer still gets an err frame but does not raise an error-level log.
+    mktempdir() do tmp
+        registry = mktempdir()
+        withenv("REPLICANT_DIR" => registry) do
+            cd(tmp) do
+                logger = Test.TestLogger()
+                Logging.with_logger(logger) do
+                    server = REPLicant.Server()
+                    port = take!(server.channel)
+                    sock = Sockets.connect(Sockets.localhost, port)
+                    write(sock, "GET /health HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                    flush(sock)
+                    @test Utilities.readframe(sock).type == REPLicant.RESPONSE_ERR
+                    read(sock)  # wait for the server to close its end
+                    close(sock)
+                    Utilities.wait_closed(server)
+                end
+                @test !any(r -> r.level >= Logging.Error, logger.logs)
+            end
+        end
+    end
+end
+
 @testitem "request_too_large" tags = [:protocol, :limits] setup = [Utilities] begin
     import Sockets
 

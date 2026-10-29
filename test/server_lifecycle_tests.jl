@@ -5,7 +5,14 @@
         @test server isa REPLicant.Server
         @test server.task isa Task
         @test !istaskdone(server.task)
-        @test port >= 8000
+    end
+end
+
+@testitem "binds_ephemeral_port" setup = [Utilities] tags = [:server_lifecycle] begin
+    # An OS-assigned port sits in the ephemeral range (32768+ on Linux, 49152+ on
+    # macOS and Windows), clear of the low ports dev servers and health checkers use.
+    Utilities.withserver() do server, mod, port
+        @test port >= 32768
     end
 end
 

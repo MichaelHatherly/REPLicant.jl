@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Bind the server to an OS-assigned ephemeral port instead of scanning up from 8000. Port 8000 is a common dev-server default. When that dev server was down, REPLicant took its port and logged an error for every HTTP health check aimed at it. A peer that doesn't speak the REPLicant protocol still gets an error reply, but the server now logs it at debug level [#55]
 - Root a server started in a git worktree at the worktree itself, not the checkout that encloses it. A worktree's `.git` is a file, not a directory, so the old directory-only check walked past it to the enclosing repository: every worktree nested under a checkout (Claude Code's default `.claude/worktrees/<name>`) took on the main project's identity and collided with it in the registry. Servers in separate worktrees now stay isolated [#45]
 - Scrub REPLicant's own eval frames from the backtrace of an error raised before any user frame (an undefined top-level binding), which previously dumped the server's internal machinery to the caller. The backtrace now matches the REPL [#42]
 - Report `julia +rpc interrupt` honestly: after scheduling the interrupt, the client confirms the server returned to idle before claiming success, and points at `kill --force` when a non-yielding eval keeps running, instead of always reporting `interrupted` [#42]

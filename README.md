@@ -163,7 +163,7 @@ server and cleans up the same way.
 
 ## How it works
 
-1. The server lets the OS pick a free port from 8000 and listens for
+1. The server lets the OS assign a free port and listens for
    length-prefixed requests.
 2. It registers itself in a shared directory (`$REPLICANT_DIR`, else
    `tempdir()/replicant`), one `key=value` file per live server. The client reads
