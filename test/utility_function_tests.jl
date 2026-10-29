@@ -64,35 +64,29 @@ end
     @test !REPLicant._is_busy()
 end
 
-@testitem "busy_frame_underscore" tags = [:utilities] begin
-    # The underscore sweep replaces one letter per frame and never changes the
-    # prompt's display width, so typed input never shifts. Only "julia" animates:
-    # the `>` and trailing space stay put.
-    base = "julia> "
-    width = textwidth(base)
-    seen = Int[]
-    for n in 0:12
-        frame = REPLicant._busy_frame(base, n)
-        @test textwidth(frame) == width
-        @test count(==('_'), frame) == 1
-        @test contains(frame, ">")  # the prompt marker is never swept
-        push!(seen, findfirst('_', frame))
-    end
-    @test seen[1:5] == collect(1:5)
-    @test seen[6] == 1  # wraps after the 5 letters of "julia"
-end
+@testitem "busy_title_is_one_write" tags = [:utilities] begin
+    import REPL
 
-@testitem "busy_frame_generic_modes" tags = [:utilities] begin
-    # The animation is generic across REPL modes: it sweeps the label before each
-    # prompt's own marker (last non-blank glyph), never a hardcoded "julia". The
-    # marker stays put and the width holds for every mode.
-    for base in ("pkg> ", "help?> ", "shell> ", "(jl) pkg> ")
-        width = textwidth(base)
-        frame = REPLicant._busy_frame(base, 0)
-        @test textwidth(frame) == width
-        @test count(==('_'), frame) == 1
-        @test endswith(frame, "> ")  # the marker and trailing space survive
+    # Records each write it is handed, as the terminal would receive them.
+    struct WriteLog <: IO
+        writes::Vector{String}
     end
+    Base.unsafe_write(io::WriteLog, p::Ptr{UInt8}, n::UInt) =
+        (push!(io.writes, unsafe_string(p, n)); n)
+    Base.write(io::WriteLog, b::UInt8) = (push!(io.writes, String([b])); 1)
+
+    ext = Base.get_extension(REPLicant, :REPLicantREPLExt)
+    log = WriteLog(String[])
+    ext.TERMINAL[] = log
+    try
+        REPLicant._notify_busy(1)
+        REPLicant._notify_busy(-1)
+    finally
+        ext.TERMINAL[] = nothing
+    end
+    # The footer repaints from another task. A title split across writes lets a
+    # repaint land inside the escape sequence, and the title prints as text.
+    @test log.writes == ["\e]2;● julia — remote eval\a", "\e]2;julia\a"]
 end
 
 @testitem "revise_dispatch" tags = [:utilities] begin

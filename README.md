@@ -152,6 +152,33 @@ close(REPLicant.server()) # stop it
 
 Showing the handle reports port, project, name, start time, and limits.
 
+### Pin status to the bottom of the terminal
+
+```julia
+REPLicant.footer!()
+```
+
+The bottom row of the terminal shows the server's status, and while an evaluation
+runs, the first line of its code:
+
+```text
+REPLicant  main  :8004  MyProject  up 12m  busy 3s  describe(df)
+```
+
+The row is taken out of the terminal's scrolling region rather than printed, so
+the prompt keeps working and ordinary output scrolls underneath it.
+
+The row identifies the server by label, port, and project. It also says whether
+the server is evaluating something right now, counting up while it is. The elapsed time
+tells a long computation from a wedged one, and the code says which computation it
+is. When the terminal is too narrow, the code is cut first. `julia +rpc log` shows
+the full history of what ran. `footer!(false)` hands the row back.
+
+Ctrl-L clears the screen above the footer and leaves the footer alone. Call
+`footer!()` from startup.jl alongside the server, or at the prompt at any time.
+With output piped or redirected there is no terminal to draw on, and it returns
+`false` without drawing.
+
 ### Stop a server
 
 ```julia

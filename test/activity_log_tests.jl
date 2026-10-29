@@ -160,6 +160,13 @@ end
     @test ext._deparse(:(x = 1)) == "x = 1"
     # Top-level multi-statement input joins on newlines.
     @test ext._deparse(Meta.parseall("a\nb")) == "a\nb"
+    # The REPL parses `a; b` on one line as a `:toplevel` nested in the input's own,
+    # and it reads back as typed rather than as a printed `Expr`.
+    @test ext._deparse(Base.parse_input_line("a; b; c")) == "a; b; c"
+    @test ext._deparse(Base.parse_input_line("a; b\nc")) == "a; b\nc"
+    # Newer parsers also put line numbers inside the nested block.
+    nested = Expr(:toplevel, LineNumberNode(1), Expr(:toplevel, LineNumberNode(1), :a, LineNumberNode(1), :b))
+    @test ext._deparse(nested) == "a; b"
 
     # The transform is an identity: it returns its input unchanged, and records it.
     expr = :(z = 3)
