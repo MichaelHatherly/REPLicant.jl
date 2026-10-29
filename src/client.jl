@@ -15,12 +15,8 @@ end
 
 # Parse every registry file, skipping malformed ones (missing or non-numeric port).
 function _read_entries()
-    dir = _registry_dir()
     entries = RegistryEntry[]
-    for fname in readdir(dir)
-        path = joinpath(dir, fname)
-        isfile(path) || continue
-        fields = _parse_registry_entry(path)
+    for (_, fields) in _registry_entries()
         port = tryparse(Int, get(fields, "port", ""))
         isnothing(port) && continue
         push!(
@@ -38,13 +34,14 @@ function _read_entries()
     return entries
 end
 
-# Entries whose servers answer a ping, pruning the registry files of those that don't.
+# Entries whose servers answer a ping, pruning the registry files of servers that are
+# gone. A busy server that cannot pong is left out but keeps its entry.
 function _live_entries()
     live = RegistryEntry[]
     for entry in _read_entries()
         if _ping(entry.port)
             push!(live, entry)
-        else
+        elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
         end
     end
@@ -361,10 +358,12 @@ function _list_servers(out::IO = stdout)
     rows = Tuple{RegistryEntry, String}[]
     for entry in _read_entries()
         status = _ping_status(entry.port)
-        if isnothing(status)
+        if !isnothing(status)
+            push!(rows, (entry, _format_status(status)))
+        elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
         else
-            push!(rows, (entry, status))
+            push!(rows, (entry, "unresponsive"))
         end
     end
     sort!(rows; by = row -> row[1].port)
@@ -378,7 +377,7 @@ function _list_servers(out::IO = stdout)
             entry.julia,
             entry.pid,
             entry.started,
-            _format_status(status),
+            status,
         )
     end
     return nothing
@@ -417,7 +416,7 @@ function _kill_server(args::Vector{String}; out::IO = stdout)
     isnothing(pid) && error("registry entry for port $(entry.port) has no valid pid")
 
     path = _registry_entry_path(entry.port)
-    if !_process_alive(pid)
+    if _server_gone(entry.port, entry.pid)
         rm(path; force = true)
         println(out, "REPLicant server on port $(entry.port) (pid $pid) was already gone")
         return 0

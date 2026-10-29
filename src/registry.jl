@@ -44,6 +44,26 @@ function _registry_entry(
     return entry
 end
 
+# Every committed registry entry as `(path, fields)`. Skips the `<port>.tmp.<pid>`
+# files an atomic write leaves in flight, and entries a concurrent prune or shutdown
+# removes between listing and reading.
+function _registry_entries()
+    dir = _registry_dir()
+    entries = Tuple{String, Dict{String, String}}[]
+    for fname in readdir(dir)
+        all(isdigit, fname) || continue
+        path = joinpath(dir, fname)
+        fields = try
+            _parse_registry_entry(path)
+        catch error
+            (error isa SystemError && !isfile(path)) || rethrow()
+            continue
+        end
+        push!(entries, (path, fields))
+    end
+    return entries
+end
+
 function _parse_registry_entry(path::AbstractString)
     fields = Dict{String, String}()
     for line in eachline(path)
@@ -126,18 +146,33 @@ _process_alive(pid::Integer) = _signal_process(pid, 0)
 _signal_process(pid::Integer, signal::Integer) =
     ccall(:uv_kill, Cint, (Cint, Cint), pid, signal) == 0
 
-# Drop registry entries for this project whose servers no longer answer a ping.
-# Replaces the old per-project lock: several live servers per project coexist.
+# Whether a server that missed its ping is gone rather than busy. A server wedged in
+# a non-yielding eval on its only thread cannot pong, yet the kernel still accepts on
+# its port; a dead one refuses, or its pid has exited. Checking both keeps a reused
+# pid from passing for the server.
+function _server_gone(port::Integer, pid::AbstractString)
+    process = tryparse(Int, pid)
+    return isnothing(process) || !_process_alive(process) || !_accepting(port)
+end
+
+function _accepting(port::Integer)
+    try
+        close(Sockets.connect(Sockets.localhost, port))
+        return true
+    catch
+        return false
+    end
+end
+
+# Drop registry entries for this project whose servers are gone. Replaces the old
+# per-project lock: several live servers per project coexist.
 function _prune_dead_entries(project::AbstractString)
-    dir = _registry_dir()
-    for fname in readdir(dir)
-        path = joinpath(dir, fname)
-        isfile(path) || continue
-        fields = _parse_registry_entry(path)
+    for (path, fields) in _registry_entries()
         get(fields, "project", nothing) == project || continue
         port = tryparse(Int, get(fields, "port", ""))
         isnothing(port) && continue
-        _ping(port) || rm(path; force = true)
+        _ping(port) && continue
+        _server_gone(port, get(fields, "pid", "")) && rm(path; force = true)
     end
     return
 end
@@ -146,11 +181,7 @@ end
 # our own `skip_port`. Pings only matching entries, so it stays cheap and never
 # probes our own busy worker. `nothing` when the label is free.
 function _label_conflict(project::AbstractString, name::AbstractString, skip_port::Integer)
-    dir = _registry_dir()
-    for fname in readdir(dir)
-        path = joinpath(dir, fname)
-        isfile(path) || continue
-        fields = _parse_registry_entry(path)
+    for (_, fields) in _registry_entries()
         get(fields, "project", nothing) == project || continue
         get(fields, "name", "") == name || continue
         port = tryparse(Int, get(fields, "port", ""))
