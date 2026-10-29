@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Precompile the client for the streams it runs on. The workload only reached `cli` with IOBuffer streams, so a client whose stdout or stderr was a pipe or a file, as every agent call is, compiled `cli` and `_send` at runtime. That took a `julia +rpc -e '1 + 1'` from about 0.2s to 0.7s, slower than a cold `julia` [#69]
 - Stop logging errors into the REPL for a peer that stalls past the read timeout. The timeout closes the socket, so the server's error reply always failed, and each stalled connection printed two `@error` records at the human's prompt [#67]
 - Count lines correctly in `--head-lines` and `--tail-lines` when the output ends in a newline. The empty string after the final newline counted as a line, so `--tail-lines=2` kept only one line of printed output and `--head-lines` reported an elision that removed nothing [#66]
 - Remove only REPLicant's own display when a server shuts down. With the server started from `startup.jl`, the REPL pushes its display afterwards, and closing the server popped the REPL's display while leaving REPLicant's behind [#65]
@@ -137,3 +138,4 @@ Initial Public Release
 [#65]: https://github.com/MichaelHatherly/REPLicant.jl/issues/65
 [#66]: https://github.com/MichaelHatherly/REPLicant.jl/issues/66
 [#67]: https://github.com/MichaelHatherly/REPLicant.jl/issues/67
+[#69]: https://github.com/MichaelHatherly/REPLicant.jl/issues/69

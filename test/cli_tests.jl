@@ -886,3 +886,26 @@ end
     @test REPLicant._elide(text, nothing, 2) == "…(3 lines elided)\n4\n5\n"
     @test REPLicant._elide(text, 5, nothing) == text
 end
+
+@testitem "client_precompiled_for_pipes" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # An agent runs the client with stdout and stderr on pipes. Any REPLicant method
+    # compiled at runtime there is JIT cost the client pays on every call. The
+    # subprocess runs unbounded, so build its image first, as `start` does.
+    project = pkgdir(REPLicant)
+    run(
+        pipeline(
+            `julia --project=$project --startup-file=no -e "using REPLicant"`;
+            stdout = devnull,
+            stderr = devnull,
+        ),
+    )
+    client = joinpath(project, "bin", "client.jl")
+    Utilities.withserver() do server, mod, port
+        trace = tempname()
+        cmd = `julia --project=$project --startup-file=no --trace-compile=stderr $client --port=$port -e "1 + 1"`
+        @test strip(read(pipeline(cmd; stderr = trace), String)) == "2"
+        @test filter(contains("REPLicant."), readlines(trace)) == String[]
+    end
+end
