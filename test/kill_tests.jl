@@ -38,8 +38,8 @@ end
     # entries with arbitrary pids and assert the cascade picks the right one.
     mktempdir() do registry
         withenv("REPLICANT_DIR" => registry) do
-            REPLicant._write_registry_entry(9001, "/work/a"; name = "alpha")
-            REPLicant._write_registry_entry(9002, "/work/b"; name = "beta")
+            REPLicant._write_registry_entry(9001, "/work/a"; token = "", name = "alpha")
+            REPLicant._write_registry_entry(9002, "/work/b"; token = "", name = "beta")
 
             @test REPLicant._kill_target(9001, "", "").port == 9001
             @test REPLicant._kill_target(-1, "", "beta").port == 9002

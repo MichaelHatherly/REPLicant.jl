@@ -19,11 +19,12 @@ PrecompileTools.@setup_workload begin
             mktempdir() do dir
                 listener = Sockets.listen(Sockets.localhost, 0)
                 port = Int(Sockets.getsockname(listener)[2])
+                token = _new_token()
                 acceptor = @async try
                     while true
                         sock = Sockets.accept(listener)
                         @async try
-                            frame = _read_frame(sock, REQUEST_TYPES)
+                            frame = _read_request(sock, token, READ_TIMEOUT_SECONDS)
                             if !isnothing(frame) && frame.type == REQUEST_PING
                                 _write_frame(sock, RESPONSE_PONG, "")
                             else
@@ -37,7 +38,7 @@ PrecompileTools.@setup_workload begin
                 catch  # dendro-ignore: empty_catch -- acceptor loop ends when the listener closes
                 end
                 withenv("REPLICANT_DIR" => dir) do
-                    _write_registry_entry(port, dir)
+                    _write_registry_entry(port, dir; token)
                     _live_entries()
                     _resolve_port(0, dir, "")
                     _send(port, "1 + 1"; out = IOBuffer())

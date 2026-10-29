@@ -51,8 +51,9 @@
         # single cohort, all of it the same two kinds: a section holds its content as
         # `Any` and renders it through `invokelatest`, and every row of drawing is
         # `write`/`string` over abstract IO. The status row's reads of the server
-        # handle's `Union`-typed runtime details add the `getfield` remainder.
-        SOUND_LIMIT = 697   # JET.report_package(REPLicant; mode = :sound)
+        # handle's `Union`-typed runtime details add the `getfield` remainder. The
+        # request token check reads the frame over abstract IO like `_read_frame`.
+        SOUND_LIMIT = 698   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

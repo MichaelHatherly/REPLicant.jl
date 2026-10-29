@@ -48,9 +48,9 @@ end
     @test decoded.code == "a\n2\nb"
 end
 
-@testitem "protocol_version_is_two" tags = [:protocol, :frame] begin
+@testitem "protocol_version_is_three" tags = [:protocol, :frame] begin
     import REPLicant
-    @test REPLicant.PROTOCOL_VERSION == 0x02
+    @test REPLicant.PROTOCOL_VERSION == 0x03
 end
 
 @testitem "frame_bare_disconnect_is_nothing" tags = [:protocol, :frame] begin

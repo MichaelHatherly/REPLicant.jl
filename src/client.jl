@@ -320,9 +320,8 @@ function _send(
         cwd::AbstractString = "", mod::AbstractString = "",
         head_lines::Union{Nothing, Int} = nothing, tail_lines::Union{Nothing, Int} = nothing,
     )
-    sock = Sockets.connect(Sockets.localhost, port)
+    sock = _open_request(port, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
     try
-        _write_frame(sock, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
         frame = try
             _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
         catch timeout
@@ -612,9 +611,8 @@ function _reset_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     isempty(parsed.mod) &&
         error("reset needs --module <name>; the default session cannot be reset")
     target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
-    sock = Sockets.connect(Sockets.localhost, target)
+    sock = _open_request(target, REQUEST_RESET, parsed.mod)
     try
-        _write_frame(sock, REQUEST_RESET, parsed.mod)
         frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
         isnothing(frame) && error("server closed the connection without a response")
         if frame.type == RESPONSE_ERR
@@ -643,9 +641,8 @@ function _log_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(rest)
     body = isempty(parsed.since) ? count : "since=$(parsed.since)"
     target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
-    sock = Sockets.connect(Sockets.localhost, target)
+    sock = _open_request(target, REQUEST_LOG, body)
     try
-        _write_frame(sock, REQUEST_LOG, body)
         frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
         isnothing(frame) && error("server closed the connection without a response")
         if frame.type == RESPONSE_ERR
@@ -681,9 +678,8 @@ end
 function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     target = _resolve_port(parsed.port, parsed.project, parsed.name)
-    sock = Sockets.connect(Sockets.localhost, target)
+    sock = _open_request(target, REQUEST_INTERRUPT, "")
     body = try
-        _write_frame(sock, REQUEST_INTERRUPT, "")
         frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
         isnothing(frame) && error("server closed the connection without a response")
         frame.body

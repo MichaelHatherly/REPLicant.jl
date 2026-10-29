@@ -33,8 +33,10 @@ evaluates code from clients until closed.
 
 # Protocol
 Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
-byte, then a big-endian `UInt32` body length) followed by the body. Requests are
-`eval` (body carries the caller's working directory, the target session module, and
+byte, then a big-endian `UInt32` body length) followed by the body. Every request
+body opens with the 64-character token from the server's registry entry, and the
+server rejects a request without it: any local user can reach the port, while
+only the owner can read the owner-only registry. Requests are `eval` (body carries the caller's working directory, the target session module, and
 the code), `ping`, `interrupt`, or `reset` (body is a session module name); responses
 are `ok`/`err` (body is the result or error text) or `pong` (body is the worker's
 busy-since timestamp, empty when idle). An `interrupt` schedules an
@@ -66,6 +68,8 @@ mutable struct Server
     read_timeout_seconds::Float64
     save::Bool
     verbose::Bool
+    # Every request must carry this; clients read it from the registry entry.
+    token::String
     # Runtime details, filled by `_server` once it binds a port, so a handle can
     # be introspected without reading the registry. `name` is set by `label!`.
     port::Union{Int, Nothing}
@@ -101,6 +105,7 @@ mutable struct Server
         srv.read_timeout_seconds = read_timeout_seconds
         srv.save = save
         srv.verbose = verbose
+        srv.token = _new_token()
         srv.port = nothing
         srv.project = nothing
         srv.started = nothing
@@ -213,7 +218,7 @@ function _listen_and_register!(srv::Server)
     port_number = Int(port_number)
 
     started = Dates.now()
-    entry_path = _write_registry_entry(port_number, project; started)
+    entry_path = _write_registry_entry(port_number, project; srv.token, started)
     # Publish the runtime details on the handle for introspection.
     srv.port = port_number
     srv.project = project
@@ -424,7 +429,7 @@ function _dispatch(
     )
     enqueued = false
     try
-        frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds = srv.read_timeout_seconds)
+        frame = _read_request(sock, srv.token, srv.read_timeout_seconds)
         if isnothing(frame)
             return  # bare disconnect, nothing to reply to
         elseif frame.type == REQUEST_PING

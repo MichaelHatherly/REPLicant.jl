@@ -3,10 +3,22 @@
 #
 
 # All live servers register here so clients discover them in one place,
-# regardless of which project each server runs in.
+# regardless of which project each server runs in. Entries carry each server's
+# token, so the directory is owner-only. Windows gives each user its own temp dir.
 function _registry_dir()
-    dir = get(ENV, "REPLICANT_DIR", joinpath(tempdir(), "replicant"))
-    mkpath(dir)
+    @static if Sys.iswindows()
+        dir = get(ENV, "REPLICANT_DIR", joinpath(tempdir(), "replicant"))
+        mkpath(dir)
+    else
+        uid = Libc.getuid()
+        # Per-user name, since a shared `/tmp` would let one user lock out the rest.
+        dir = get(ENV, "REPLICANT_DIR", joinpath(tempdir(), "replicant-$uid"))
+        mkpath(dir; mode = 0o700)
+        stat(dir).uid == uid || error(
+            "REPLicant registry $dir is owned by another user; refusing to use it. Set REPLICANT_DIR to a directory you own.",
+        )
+        filemode(dir) & 0o077 == 0 || chmod(dir, 0o700)
+    end
     return dir
 end
 
@@ -15,12 +27,14 @@ _registry_entry_path(port::Integer) = joinpath(_registry_dir(), string(port))
 function _registry_entry(
         port::Integer,
         project::AbstractString;
+        token::AbstractString,
         name::AbstractString = "",
         started = Dates.now(),
     )
     entry = """
     port=$port
     project=$project
+    token=$token
     pid=$(getpid())
     julia=$(VERSION)
     version=$(pkgversion(@__MODULE__))
@@ -46,6 +60,7 @@ end
 function _write_registry_entry(
         port::Integer,
         project::AbstractString;
+        token::AbstractString,
         name::AbstractString = "",
         started = Dates.now(),
     )
@@ -53,7 +68,7 @@ function _write_registry_entry(
     temp = "$path.tmp.$(getpid())"
     try
         open(temp, "w") do io
-            write(io, _registry_entry(port, project; name, started))
+            write(io, _registry_entry(port, project; token, name, started))
         end
         mv(temp, path; force = true)
     catch error
@@ -63,15 +78,22 @@ function _write_registry_entry(
     return path
 end
 
+# The token the server on `port` registered, or empty when it has no entry. An
+# empty token fails the server's check like any wrong one.
+function _entry_token(port::Integer)
+    path = _registry_entry_path(port)
+    isfile(path) || return ""
+    return get(_parse_registry_entry(path), "token", "")
+end
+
 # Probe a server with a ping frame. Returns the pong body (a busy-since marker,
 # empty when idle) when the server answers, or `nothing` when it does not. A
 # different-version server fails the version check and reads as dead, which is the
 # intended lockstep behavior.
 function _ping_status(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
     try
-        sock = Sockets.connect(Sockets.localhost, port)
+        sock = _open_request(port, REQUEST_PING, "")
         try
-            _write_frame(sock, REQUEST_PING, "")
             frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
             (isnothing(frame) || frame.type != RESPONSE_PONG) && return nothing
             return frame.body
@@ -161,7 +183,7 @@ function label!(name::AbstractString)
     isnothing(conflict) || error(
         "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
     )
-    _write_registry_entry(port, project; name, started)
+    _write_registry_entry(port, project; srv.token, name, started)
     srv.name = name
     srv.verbose && @info "Labeled REPLicant server" port name
     return name
