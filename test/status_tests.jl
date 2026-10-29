@@ -23,6 +23,23 @@ end
     @test occursin("no server", row)
 end
 
+@testitem "footer_stays_on_the_sessions_server" tags = [:footer] setup = [Utilities] begin
+    import REPLicant
+
+    # The footer reports the server it was enabled for. Servers started later in
+    # the process, as tests start them, must not take it over or blank it when they
+    # close. Once its own server stops, it shows whichever server is current.
+    Utilities.withproject() do start, registry
+        session, _ = start()
+        other, _ = start()
+        @test REPLicant._footer_target(session) === session
+        Utilities.wait_closed(other)
+        @test REPLicant._footer_target(session) === session
+        Utilities.wait_closed(session)
+        @test REPLicant._footer_target(session) === REPLicant.CURRENT_SERVER[]
+    end
+end
+
 @testitem "status_row_reports_the_running_server" tags = [:footer] setup = [Utilities] begin
     import Dates
     import REPLicant
