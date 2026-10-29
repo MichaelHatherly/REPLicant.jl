@@ -865,3 +865,24 @@ end
         @test count(==(UInt8('a')), take!(out)) == bytes
     end
 end
+
+@testitem "client_module_has_eval" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # A named session evaluates into itself the way a `module ... end` block does.
+    Utilities.withserver() do server, mod, port
+        out = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=Sess", "-e", "eval(:(w = 7)); w"]; out) == 0
+        @test strip(String(take!(out))) == "7"
+    end
+end
+
+@testitem "client_elide_trailing_newline" tags = [:cli] begin
+    import REPLicant
+
+    # Printed output ends in a newline, which closes the last line rather than
+    # starting another.
+    text = "1\n2\n3\n4\n5\n"
+    @test REPLicant._elide(text, nothing, 2) == "…(3 lines elided)\n4\n5\n"
+    @test REPLicant._elide(text, 5, nothing) == text
+end

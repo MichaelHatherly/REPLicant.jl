@@ -297,12 +297,16 @@ end
 # `nothing`/`nothing` (no flags) returns the text unchanged.
 function _elide(text::AbstractString, head, tail)
     (head === nothing && tail === nothing) && return text
-    h = head === nothing ? 0 : head
-    t = tail === nothing ? 0 : tail
+    h::Int = something(head, 0)
+    t::Int = something(tail, 0)
     lines = split(text, '\n')
+    # A trailing newline closes the last line; it does not start another.
+    closed = isempty(last(lines))
+    closed && pop!(lines)
     length(lines) <= h + t && return text
     elided = length(lines) - h - t
     kept = String[lines[1:h]; "…($elided lines elided)"; lines[(end - t + 1):end]]
+    closed && push!(kept, "")
     return join(kept, '\n')
 end
 
@@ -408,8 +412,10 @@ end
 
 # Terminate a target server's process. Resolves from the raw registry so a wedged
 # server still resolves, sends SIGTERM (SIGKILL with --force), and removes the
-# registry entry, since a SIGKILL skips the server's own cleanup.
-function _kill_server(args::Vector{String}; out::IO = stdout)
+# registry entry once the process exits, since a SIGKILL skips the server's own
+# cleanup. A process that outlives the signal keeps its entry, so `--force` still
+# finds it.
+function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name)
     pid = tryparse(Int, entry.pid)
@@ -422,7 +428,16 @@ function _kill_server(args::Vector{String}; out::IO = stdout)
         return 0
     end
 
-    _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
+    signal = parsed.force ? "SIGKILL" : "SIGTERM"
+    delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
+    if !delivered || !_await_exit(pid)
+        println(
+            err,
+            "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
+            but it is still running; stop it with: julia +rpc kill --force",
+        )
+        return 1
+    end
     rm(path; force = true)
     action = parsed.force ? "killed" : "terminated"
     println(out, "$action REPLicant server on port $(entry.port) (pid $pid)")
@@ -656,6 +671,19 @@ function _log_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     end
 end
 
+# How long `kill` waits for a signalled server to exit before reporting it alive.
+const KILL_EXIT_SECONDS = 5.0
+
+# Poll a process until it exits, or the budget elapses. Returns whether it exited.
+function _await_exit(pid::Integer)
+    deadline = time() + KILL_EXIT_SECONDS
+    while time() < deadline
+        _process_alive(pid) || return true
+        sleep(0.05)
+    end
+    return false
+end
+
 # Poll a server until it reports idle, or the budget elapses. Pings are answered
 # off the worker queue, so a busy worker still pongs (an empty marker means idle).
 # Returns whether the server reached idle.
@@ -678,14 +706,17 @@ function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = std
     parsed = _parse_args(args)
     target = _resolve_port(parsed.port, parsed.project, parsed.name)
     sock = _open_request(target, REQUEST_INTERRUPT, "")
-    body = try
-        frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
-        isnothing(frame) && error("server closed the connection without a response")
-        frame.body
+    frame = try
+        _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
     finally
         close(sock)
     end
-
+    isnothing(frame) && error("server closed the connection without a response")
+    body = frame.body
+    if frame.type == RESPONSE_ERR
+        println(err, "replicant: $body")
+        return 1
+    end
     if body != "interrupted"
         # Nothing was running (e.g. "no evaluation running"); report it as-is.
         println(out, "REPLicant server on port $target: $body")
@@ -768,7 +799,7 @@ function _run_subcommand(args::Vector{String}, out::IO, err::IO)
     command in ("help", "--help", "-h") && return _usage(out)
     command in ("ls", "list") && return (_list_servers(out); 0)
     command == "start" && return _start_server(rest; out)
-    command == "kill" && return _kill_server(rest; out)
+    command == "kill" && return _kill_server(rest; out, err)
     command == "interrupt" && return _interrupt_server(rest; out, err)
     command == "reset" && return _reset_server(rest; out, err)
     command == "log" && return _log_server(rest; out, err)

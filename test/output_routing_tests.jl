@@ -39,3 +39,20 @@ end
         @test true skip = true
     end
 end
+
+@testitem "uninstall_routing_pops_its_own_display" tags = [:output_routing] begin
+    import REPLicant
+
+    # The REPL pushes its display after a startup.jl server has installed routing.
+    REPLicant._uninstall_routing!()
+    REPLicant._install_routing!()
+    repl_display = TextDisplay(IOBuffer())
+    pushdisplay(repl_display)
+    try
+        REPLicant._uninstall_routing!()
+        @test Base.Multimedia.displays[end] === repl_display
+        @test !any(d -> d isa REPLicant.RouterDisplay, Base.Multimedia.displays)
+    finally
+        filter!(d -> d !== repl_display, Base.Multimedia.displays)
+    end
+end

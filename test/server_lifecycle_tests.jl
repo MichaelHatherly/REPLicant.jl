@@ -207,3 +207,14 @@ end
         REPLicant.CURRENT_SERVER[] = old
     end
 end
+
+@testitem "server_close_twice" tags = [:server_lifecycle] setup = [Utilities] begin
+    import REPLicant
+
+    server = Utilities.withproject() do start, registry
+        server, _ = start()
+        Utilities.wait_closed(server)
+        server
+    end
+    @test close(server) === nothing
+end

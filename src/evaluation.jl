@@ -89,7 +89,8 @@ function _uninstall_routing!()
     ROUTING_INSTALLED[] || return nothing
     redirect_stdout(REAL_OUT[])
     redirect_stderr(REAL_ERR[])
-    popdisplay()
+    # The REPL may have pushed its own display on top since routing was installed.
+    popdisplay(RouterDisplay())
     ROUTING_INSTALLED[] = false
     return nothing
 end
@@ -219,10 +220,11 @@ end
 # redefined module binding unreliable; reset is a plain Dict write, visible at once.
 
 # Build a fresh session module named `sym`. `Module` carries the standard `Base`
-# imports; wire `include` to the module itself, the way a `module ... end` block
-# would, so script files and `include` run inside it.
+# imports; wire `eval` and `include` to the module itself, the way a `module ... end`
+# block would, so script files and `include` run inside it.
 function _new_session(sym::Symbol)
     mod = Module(sym)
+    Core.eval(mod, :(eval(x) = $(Core.eval)($mod, x)))
     Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))
     return mod
 end

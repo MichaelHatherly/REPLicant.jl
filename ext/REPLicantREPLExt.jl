@@ -149,4 +149,9 @@ function REPLicant.__install_activity_capture(::Nothing)
     return nothing
 end
 
+function __init__()
+    REPLicant.ACTIVITY_CAPTURE_REQUESTED[] && REPLicant.__install_activity_capture(nothing)
+    return nothing
+end
+
 end

@@ -624,7 +624,8 @@ function upkeep(footer::Footer)
     while true
         sleep(UPKEEP_TICK)
         install_eval_hook!()
-        __install_keys(nothing)
+        # The REPL extension can load after this task started, in a newer world.
+        Base.invokelatest(__install_keys, nothing)
         footer.enabled || continue
         evaluated = EVALUATED[]
         evaluated && (EVALUATED[] = false)

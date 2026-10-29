@@ -381,3 +381,27 @@ end
     F.repaint!(footer)
     @test written(buf) == "\e7\e[1S\e[1;23r\e[24;1Hone\e[0m\e[K\e8\e[1A"
 end
+
+@testitem "footer_upkeep_reaches_keys_installed_later" tags = [:footer] begin
+    import REPLicant
+
+    # On Julia 1.11+ a footer enabled from startup.jl starts upkeep before REPL, and so
+    # the extension's key binding, has loaded. A fresh process keeps the stand-in
+    # binding out of this one.
+    script = """
+    using REPLicant
+    F = REPLicant.Footers
+    footer = F.Footer(IOContext(IOBuffer(), :displaysize => (24, 80)))
+    Threads.@spawn F.upkeep(footer)
+    sleep(2 * F.UPKEEP_TICK)
+    called = Ref(false)
+    @eval F.__install_keys(::Nothing) = (\$called[] = true; true)
+    deadline = time() + 10
+    while !called[] && time() < deadline
+        sleep(0.1)
+    end
+    print(called[])
+    """
+    cmd = `$(Base.julia_cmd()) --project=$(pkgdir(REPLicant)) --startup-file=no -e $script`
+    @test read(pipeline(cmd; stderr = devnull), String) == "true"
+end

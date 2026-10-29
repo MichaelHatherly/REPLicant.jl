@@ -186,9 +186,12 @@ end
     close(server::Server)
 
 Shut down the server: interrupt its task, close active connections, and remove its
-registry entry.
+registry entry. Closing a stopped server does nothing.
 """
-Base.close(server::Server) = schedule(server.task, InterruptException(); error = true)
+function Base.close(server::Server)
+    istaskdone(server.task) || schedule(server.task, InterruptException(); error = true)
+    return nothing
+end
 
 function _server(srv::Server)
     server, port_number, entry_path = _listen_and_register!(srv)
