@@ -173,3 +173,18 @@ end
     @test ext._repl_input_transform(expr) === expr
     @test contains(REPLicant._render_activity_log(""), "z = 3")
 end
+
+@testitem "activity_capture_survives_late_repl" tags = [:activity] begin
+    import REPLicant
+
+    # On Julia 1.11+ startup.jl starts the server before REPL, and so the extension
+    # that installs the capture, has loaded.
+    script = """
+    using REPLicant
+    REPLicant._install_activity_capture()
+    using REPL
+    print(any(f -> nameof(f) === :_repl_input_transform, REPL.repl_ast_transforms))
+    """
+    cmd = `$(Base.julia_cmd()) --project=$(pkgdir(REPLicant)) --startup-file=no -e $script`
+    @test read(pipeline(cmd; stderr = devnull), String) == "true"
+end
