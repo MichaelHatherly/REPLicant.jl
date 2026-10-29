@@ -54,6 +54,34 @@ end
     end
 end
 
+@testitem "kill_spares_reused_pid" tags = [:kill] begin
+    import REPLicant
+    import Sockets
+
+    # A server that died without cleanup: its port is closed and the OS handed its
+    # pid to an unrelated process.
+    proc = run(`$(Base.julia_cmd()) --startup-file=no -e "sleep(30)"`; wait = false)
+    try
+        port, listener = Sockets.listenany(0)
+        close(listener)
+        mktempdir() do registry
+            withenv("REPLICANT_DIR" => registry) do
+                path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                write(path, replace(read(path, String), r"pid=\d+" => "pid=$(getpid(proc))"))
+
+                out = IOBuffer()
+                @test REPLicant._kill_server(["--port=$port"]; out) == 0
+                @test contains(String(take!(out)), "already gone")
+                @test !isfile(path)
+            end
+        end
+        sleep(0.5)
+        @test process_running(proc)
+    finally
+        kill(proc, Base.SIGKILL)
+    end
+end
+
 @testitem "kill_terminates_wedged_server" tags = [:kill] setup = [Utilities] begin
     import REPLicant
     import Sockets
