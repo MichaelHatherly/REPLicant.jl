@@ -380,3 +380,21 @@ end
         @test Utilities.request(port, "1 + 1") == "2"
     end
 end
+
+@testitem "read_timeout_logs_quietly" tags = [:protocol] begin
+    import REPLicant
+    import Logging
+    import Sockets
+
+    # A peer that stalls past the read timeout: the timer has already closed the
+    # socket, so there is no client left to reply to.
+    port, listener = Sockets.listenany(0)
+    sock = Sockets.connect(Sockets.localhost, port)
+    close(sock)
+    logger = Test.TestLogger(; min_level = Logging.Debug)
+    Logging.with_logger(logger) do
+        REPLicant._reply_error(sock, 1, REPLicant.ReadTimeout(30.0))
+    end
+    close(listener)
+    @test !any(record -> record.level >= Logging.Warn, logger.logs)
+end
