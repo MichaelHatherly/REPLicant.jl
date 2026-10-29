@@ -67,82 +67,58 @@ end
     end
 end
 
-@testitem "activity_tail_rows" tags = [:footer] setup = [Utilities] begin
+@testitem "status_row_shows_the_running_code" tags = [:footer] setup = [Utilities] begin
+    import Dates
     import REPLicant
 
-    Utilities.reset_activity()
-    @test REPLicant._render_activity(REPLicant._recent_activity(3), 80) == ""
+    Utilities.withserver() do server, mod, port
+        # The worker records what it is running for as long as it runs it.
+        running = @async Utilities.request(port, "sleep(1); :slept")
+        @test timedwait(() -> !isnothing(server.busy_since), 5.0) === :ok
+        @test server.busy_code == "sleep(1); :slept"
+        wait(running)
 
-    REPLicant._record_activity(:socket, "1 + 1", "2", false)
-    REPLicant._record_activity(:socket, "sqrt(-1)", "ERROR: DomainError", true)
-    REPLicant._record_repl_input("x = 1")
+        now = Dates.now()
+        server.busy_since = now - Dates.Second(2)
+        server.busy_code = "sleep(6); :slept"
+        busy = REPLicant._render_status(server, now, 120)
+        @test occursin("busy 2s", busy)
+        @test occursin("sleep(6); :slept", busy)
 
-    rows = split(REPLicant._render_activity(REPLicant._recent_activity(3), 80), '\n')
-    @test length(rows) == 3
-    # Oldest first, so the newest sits closest to the prompt.
-    @test occursin("1 + 1", rows[1])
-    @test occursin("sqrt(-1)", rows[2])
-    @test occursin("x = 1", rows[3])
-    # Each row says where the entry came from and which sequence number it has, so
-    # it lines up with what a `log` request renders.
-    @test occursin("#1", rows[1])
-    @test occursin("socket", rows[1])
-    @test occursin("repl", rows[3])
+        # A multi-line request is shown by its first line, with the rest marked.
+        server.busy_code = "function f(x)\n    x + 1\nend"
+        multi = REPLicant._render_status(server, now, 120)
+        @test !occursin('\n', multi)
+        @test occursin("function f(x) …", multi)
 
-    # Output is not shown: the tail is a glance at what ran, not a transcript.
-    @test !occursin("DomainError", rows[2])
-
-    # Only the last few, and only ever the last few.
-    @test length(split(REPLicant._render_activity(REPLicant._recent_activity(2), 80), '\n')) == 2
+        # The code belongs to the evaluation, so an idle row never shows it.
+        server.busy_since = nothing
+        @test !occursin("function f(x)", REPLicant._render_status(server, now, 120))
+    end
 end
 
-@testitem "activity_tail_aligns_its_columns" tags = [:footer] setup = [Utilities] begin
+@testitem "status_row_cuts_the_code_first" tags = [:footer] setup = [Utilities] begin
+    import Dates
     import REPLicant
 
-    Utilities.reset_activity()
-    # Start below a digit boundary, so the sequence numbers differ in width.
-    REPLicant.ACTIVITY_SEQ[] = 8
-    REPLicant._record_activity(:socket, "a = 1", "1", false)
-    REPLicant._record_repl_input("b = 2")
+    Utilities.withserver() do server, mod, port
+        now = Dates.now()
+        server.busy_since = now
+        server.busy_code = repeat("x", 200)
 
-    rows = split(REPLicant._render_activity(REPLicant._recent_activity(2), 80), '\n')
-    plain = [replace(row, r"\e\[[0-9;]*m" => "") for row in rows]
-    @test startswith(plain[1], "#9 ")
-    @test startswith(plain[2], "#10 ")
-    # Sequence, source, and time are padded, so the code starts in one column.
-    @test findfirst("a = 1", plain[1]) == findfirst("b = 2", plain[2])
-end
+        # Long code is cut to the columns left over, and every field survives.
+        wide = REPLicant._render_status(server, now, 80)
+        @test REPLicant.Footers.display_width(wide) <= 80
+        @test occursin(basename(server.project), wide)
+        @test occursin("busy 0s", wide)
+        @test occursin("xxx", wide)
 
-@testitem "activity_tail_takes_one_row_per_entry" tags = [:footer] setup = [Utilities] begin
-    import REPLicant
-
-    Utilities.reset_activity()
-    REPLicant._record_activity(:socket, "function f(x)\n    x + 1\nend", "f (generic function with 1 method)", false)
-
-    row = REPLicant._render_activity(REPLicant._recent_activity(1), 80)
-    # A multi-line input is one row with the rest of it accounted for, rather than
-    # three rows of footer for one entry.
-    @test !occursin('\n', row)
-    @test occursin("function f(x)", row)
-    @test occursin("…", row)
-end
-
-@testitem "recent_activity_includes_the_open_entry" tags = [:footer] setup = [Utilities] begin
-    import REPLicant
-
-    Utilities.reset_activity()
-    REPLicant._record_activity(:socket, "a = 1", "1", false)
-    # The human's line stays open while its output streams in, so a tail that waited
-    # for the next prompt would always be a line behind.
-    REPLicant._record_repl_input("b = 2")
-
-    entries = REPLicant._recent_activity(5)
-    @test [entry.code for entry in entries] == ["a = 1", "b = 2"]
-    @test [entry.source for entry in entries] == [:socket, :repl]
-
-    # Asking for more than there is gives what there is.
-    @test length(REPLicant._recent_activity(100)) == 2
-    @test isempty(REPLicant._recent_activity(0))
+        # With no columns left over, the code goes before any field does.
+        narrow = REPLicant._render_status(server, now, 14)
+        @test !occursin("x", narrow)
+        @test occursin(":$port", narrow)
+        @test occursin("busy", narrow)
+    end
 end
 
 @testitem "footer_repaints_once_the_server_is_idle" tags = [:footer] setup = [Utilities] begin

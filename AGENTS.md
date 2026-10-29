@@ -49,8 +49,8 @@ Three parts. The code is the reference; this is the map:
   a target, forwards the request. The `rpc` juliaup channel runs it.
 - **Registry**: one `key=value` file per live server, so any client finds every
   server in one place.
-- **Footer** (`src/footer.jl`, `src/status.jl`): opt-in rows pinned to the bottom
-  of an interactive server's terminal, showing its status and recent activity.
+- **Footer** (`src/footer.jl`, `src/status.jl`): an opt-in row pinned to the
+  bottom of an interactive server's terminal, showing its status and running code.
   `Footers` is the drawing, and knows nothing about servers; `status.jl` is the
   content it draws.
 

@@ -158,25 +158,21 @@ Showing the handle reports port, project, name, start time, and limits.
 REPLicant.footer!()
 ```
 
-The bottom rows of the terminal show the server's status and the last few things
-the session ran, from the prompt and over the socket alike:
+The bottom row of the terminal shows the server's status, and while an evaluation
+runs, the first line of its code:
 
-```
-#12 socket 14:03:21  using DataFrames
-#13 repl 14:03:44  describe(df)
-REPLicant  main  :8004  MyProject  up 12m  busy 3s
+```text
+REPLicant  main  :8004  MyProject  up 12m  busy 3s  describe(df)
 ```
 
-Those rows are taken out of the terminal's scrolling region rather than printed,
-so the prompt keeps working and ordinary output scrolls underneath them.
+The row is taken out of the terminal's scrolling region rather than printed, so
+the prompt keeps working and ordinary output scrolls underneath it.
 
-The status row carries the server's label, port, project, and uptime, and whether
-it is evaluating something right now, counting up for as long as it is. That last
-field is what tells a long computation from a wedged one.
-
-- `entries` sets how many activity rows to show: 3 by default, `0` for the status
-  row alone. They are the same entries `julia +rpc log` renders in full.
-- `footer!(false)` hands the rows back.
+The row identifies the server by label, port, and project. It also says whether
+the server is evaluating something right now, counting up while it is. The elapsed time
+tells a long computation from a wedged one, and the code says which computation it
+is. When the terminal is too narrow, the code is cut first. `julia +rpc log` shows
+the full history of what ran. `footer!(false)` hands the row back.
 
 Ctrl-L clears the screen above the footer and leaves the footer alone. Call
 `footer!()` from startup.jl alongside the server, or at the prompt at any time.

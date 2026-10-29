@@ -75,6 +75,8 @@ mutable struct Server
     # When the worker is mid-evaluation, the time it started; `nothing` when idle.
     # Written only by the single worker task, read by ping responders for `ls`.
     busy_since::Union{Dates.DateTime, Nothing}
+    # The code of the latest evaluation, current only while `busy_since` is set.
+    busy_code::String
     # Notified to request an interrupt of the eval in flight; `nothing` when idle.
     # The dispatcher notifies it off the worker queue; a watcher pinned to the
     # eval's thread answers, scheduling the `InterruptException` only while the eval
@@ -104,6 +106,7 @@ mutable struct Server
         srv.started = nothing
         srv.name = ""
         srv.busy_since = nothing
+        srv.busy_code = ""
         srv.interrupt_signal = nothing
         srv.sessions = SessionStore()
         srv.task = errormonitor(@async _server(srv))
@@ -320,7 +323,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                             end
                         end
                     end
-                    _set_busy!(srv, Dates.now())
+                    _set_busy!(srv, Dates.now(), request.code)
                     srv.interrupt_signal = signal
                     try
                         wait(eval_task)
@@ -388,7 +391,11 @@ end
 _busy_marker(srv::Server) = isnothing(srv.busy_since) ? "" : string(srv.busy_since)
 
 # The footer's status row reads `busy_since`, so each change to it asks for a repaint.
-function _set_busy!(srv::Server, since::Union{Dates.DateTime, Nothing})
+# The code is written first, so a reader that sees the time also sees its code.
+function _set_busy!(
+        srv::Server, since::Union{Dates.DateTime, Nothing}, code::AbstractString = srv.busy_code,
+    )
+    srv.busy_code = code
     srv.busy_since = since
     Footers.update!()
     return nothing
