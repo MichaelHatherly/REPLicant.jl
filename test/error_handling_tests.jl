@@ -131,3 +131,19 @@ end
     # Should not get to the second error
     @test !contains(result.output, "another_undefined_var")
 end
+
+@testitem "revise_failure_reaches_client" tags = [:error_handling] setup = [Utilities] begin
+    import REPLicant
+
+    # Stand in for the Revise extension with a revision that throws.
+    REPLicant.__revise(::Nothing, f, args...; kws...) = error("revision failed")
+    try
+        Utilities.withserver() do server, mod, port
+            frame = Utilities.requestframe(port, REPLicant.REQUEST_EVAL, "1 + 1")
+            @test frame.type == REPLicant.RESPONSE_ERR
+            @test contains(frame.body, "revision failed")
+        end
+    finally
+        Base.delete_method(which(REPLicant.__revise, Tuple{Nothing, Any}))
+    end
+end

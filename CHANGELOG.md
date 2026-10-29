@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report a failed Revise revision to the client as an error. The revision ran before the eval's error handling. When a tracked file failed to re-evaluate, nothing answered the request or closed its socket, and `julia +rpc` without `--timeout` hung until killed [#59]
 - Keep the registry entry of a server too busy to answer a ping. A server running a non-yielding eval on its only thread misses the 2s pong, and any `ls`, eval, or new server start deleted its entry for good, leaving it unreachable by `ls`, `interrupt`, and `kill`. An entry is now pruned only when its port refuses connections or its process has exited, and `ls` lists the busy server as `unresponsive`. `kill` applies the same check before signalling, so an entry left by a crashed server no longer sends SIGTERM to an unrelated process that reused its pid. Registry readers also skip the temporary files of an in-flight write and entries removed between listing and reading, which previously showed up as duplicate servers or crashed the client [#58]
 - Bind the server to an OS-assigned ephemeral port instead of scanning up from 8000. Port 8000 is a common dev-server default. When that dev server was down, REPLicant took its port and logged an error for every HTTP health check aimed at it. A peer that doesn't speak the REPLicant protocol still gets an error reply, but the server now logs it at debug level [#55]
 - Root a server started in a git worktree at the worktree itself, not the checkout that encloses it. A worktree's `.git` is a file, not a directory, so the old directory-only check walked past it to the enclosing repository: every worktree nested under a checkout (Claude Code's default `.claude/worktrees/<name>`) took on the main project's identity and collided with it in the registry. Servers in separate worktrees now stay isolated [#45]
@@ -119,3 +120,4 @@ Initial Public Release
 [#56]: https://github.com/MichaelHatherly/REPLicant.jl/issues/56
 [#57]: https://github.com/MichaelHatherly/REPLicant.jl/issues/57
 [#58]: https://github.com/MichaelHatherly/REPLicant.jl/issues/58
+[#59]: https://github.com/MichaelHatherly/REPLicant.jl/issues/59

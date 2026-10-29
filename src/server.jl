@@ -303,8 +303,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                     # sticky (`@async`, not `Threads.@spawn`): the watcher below
                     # schedules the interrupt from this same thread, so the eval must
                     # stay pinned to it.
-                    eval_task = @async _revise(
-                        _handle_eval,
+                    eval_task = @async _handle_eval(
                         request.socket,
                         request.id,
                         request.code,
@@ -333,9 +332,9 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                     try
                         wait(eval_task)
                     catch error
-                        # `_handle_eval` reports eval errors to the client itself, so
-                        # a throw here is the eval task failing unexpectedly (e.g. a
-                        # Revise error). Log it and keep the worker alive.
+                        # `_handle_eval` reports eval and revision errors to the client
+                        # itself, so a throw here is the eval task failing unexpectedly.
+                        # Log it and keep the worker alive.
                         @error "Eval task failed" id = request.id error
                     finally
                         srv.interrupt_signal = nothing
