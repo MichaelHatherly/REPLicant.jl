@@ -18,6 +18,17 @@ end
     @test lines[2] == "42"
 end
 
+@testitem "eval_trailing_semicolon_hides_value" tags = [:code_evaluation] begin
+    # As at the REPL, a trailing `;` hides the value but not printed output. A `;`
+    # inside a string or before a comment is not the end of the code.
+    mod = Module()
+    hidden = REPLicant._evaluate("println(\"shown\"); y = 1; # done", 1, mod, "")
+    @test !hidden.errored
+    @test strip(hidden.output) == "shown"
+    @test mod.y == 1
+    @test strip(REPLicant._evaluate("\"a;\"", 2, mod, "").output) == "\"a;\""
+end
+
 @testitem "eval_multiline_code" tags = [:code_evaluation] begin
     mod = Module()
     code = """

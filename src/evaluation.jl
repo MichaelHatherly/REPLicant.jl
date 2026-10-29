@@ -201,7 +201,8 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
         if result.error
             _error_message(buffer, result, id)
         else
-            _echo_object(result.value) && _show_object(buffer, result, mod)
+            _echo_object(result.value) && !_ends_with_semicolon(code) &&
+                _show_object(buffer, result, mod)
         end
 
         return (; output = String(take!(buffer)), errored = result.error)
@@ -273,6 +274,16 @@ _echo_object(object) = true
 # The REPL prints nothing for a `nothing` result; match that rather than echoing
 # the literal "nothing". `display`, which returns `nothing`, is the common case.
 _echo_object(::Nothing) = false
+
+# The REPL hides the value of code ending in `;`. REPL's own check is in the REPL
+# stdlib, which a headless server does not load, so read the last token that is
+# not whitespace or a comment from the parser Base ships.
+function _ends_with_semicolon(code::AbstractString)
+    tokens = JuliaSyntax.tokenize(code)
+    trivia = (JuliaSyntax.K"Whitespace", JuliaSyntax.K"NewlineWs", JuliaSyntax.K"Comment")
+    last = findlast(token -> !(JuliaSyntax.kind(token) in trivia), tokens)
+    return !isnothing(last) && JuliaSyntax.kind(tokens[last]) == JuliaSyntax.K";"
+end
 
 function _show_object(buffer, result, mod)
     # Mimic REPL display settings: limit output size, no color codes
