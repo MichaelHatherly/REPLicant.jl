@@ -36,9 +36,10 @@ function REPLicant.__notify_busy(::Nothing)
     terminal = _terminal()
     terminal === nothing && return nothing
     # OSC 2 sets the title on the real terminal, bypassing the stdout redirection
-    # that eval installs.
+    # that eval installs. One write, so a footer repaint from another task cannot
+    # land inside the sequence and leave the title printed as text.
     title = REPLicant._is_busy() ? "● julia — remote eval" : "julia"
-    print(terminal, "\e]2;", title, "\a")
+    write(terminal, "\e]2;$title\a")
     return nothing
 end
 

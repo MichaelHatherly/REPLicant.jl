@@ -64,6 +64,31 @@ end
     @test !REPLicant._is_busy()
 end
 
+@testitem "busy_title_is_one_write" tags = [:utilities] begin
+    import REPL
+
+    # Records each write it is handed, as the terminal would receive them.
+    struct WriteLog <: IO
+        writes::Vector{String}
+    end
+    Base.unsafe_write(io::WriteLog, p::Ptr{UInt8}, n::UInt) =
+        (push!(io.writes, unsafe_string(p, n)); n)
+    Base.write(io::WriteLog, b::UInt8) = (push!(io.writes, String([b])); 1)
+
+    ext = Base.get_extension(REPLicant, :REPLicantREPLExt)
+    log = WriteLog(String[])
+    ext.TERMINAL[] = log
+    try
+        REPLicant._notify_busy(1)
+        REPLicant._notify_busy(-1)
+    finally
+        ext.TERMINAL[] = nothing
+    end
+    # The footer repaints from another task. A title split across writes lets a
+    # repaint land inside the escape sequence, and the title prints as text.
+    @test log.writes == ["\e]2;● julia — remote eval\a", "\e]2;julia\a"]
+end
+
 @testitem "revise_dispatch" tags = [:utilities] begin
     # Test the revise dispatch mechanism
     # Without Revise loaded, should just call function directly
