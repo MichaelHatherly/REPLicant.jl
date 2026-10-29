@@ -138,7 +138,7 @@ the prompt or a type defined after the painting task was spawned. Calling either
 from that task is a world age error, so both go through `invokelatest`.
 """
 render(text::AbstractString, ::Integer, ::Integer) =
-    isempty(text) ? String[] : collect(split(chomp(text), '\n'))
+    isempty(text) ? String[] : collect(String, split(chomp(text), '\n'))
 render(f::Function, rows::Integer, width::Integer) =
     render(Base.invokelatest(f, width), rows, width)
 function render(value, rows::Integer, width::Integer)
@@ -468,13 +468,12 @@ function repaint!(footer::Footer)
     # block `set!` and every other caller behind it.
     lines = footer_lines(sections, height, width)
 
-    local bytes
-    Base.@lock footer.lock begin
+    bytes = Base.@lock footer.lock begin
         footer.enabled || return nothing
         n = min(length(lines), max(height - 1, 0))
         # A resize resets DECSTBM, so the region has to be claimed again.
         resized = (height, width) != (footer.painted.height, footer.painted.width)
-        bytes = paint(
+        painted = paint(
             footer.painted.rows,
             lines,
             height,
@@ -484,6 +483,7 @@ function repaint!(footer::Footer)
         )
         footer.painted = Painted(n, height, width, [min(display_width(line), width) for line in lines[1:n]])
         footer.stale = false
+        painted
     end
     isempty(bytes) || write(footer.io, bytes)
     return nothing
