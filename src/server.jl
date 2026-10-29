@@ -14,8 +14,8 @@ SessionStore() = SessionStore(ReentrantLock(), Dict{String, Module}())
 """
     Server([mod]; max_connections = 100, read_timeout_seconds = 30.0, save = false, verbose = false)
 
-Start a persistent Julia REPL server on a TCP socket. It picks a free port from
-8000, registers itself in the registry (see [`install_channel`](@ref)), and
+Start a persistent Julia REPL server on a TCP socket. It binds a free port the
+OS assigns, registers itself in the registry (see [`install_channel`](@ref)), and
 evaluates code from clients until closed.
 
 # Arguments
@@ -204,9 +204,9 @@ function _listen_and_register!(srv::Server)
     # allowed; clients disambiguate by label (see `label!`) or port.
     _prune_dead_entries(project)
 
-    # Let the OS pick an available port starting from 8000. This avoids
-    # conflicts and doesn't require users to manage port allocation.
-    port_number, server = Sockets.listenany(8000)
+    # Let the OS assign an ephemeral port. Low ports like 8000 collide with dev
+    # servers, and the HTTP health checks aimed at them would land here instead.
+    port_number, server = Sockets.listenany(0)
     port_number = Int(port_number)
 
     started = Dates.now()

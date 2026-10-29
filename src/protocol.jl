@@ -83,6 +83,16 @@ end
 Base.showerror(io::IO, err::ReadTimeout) =
     print(io, "Read timeout: no data received within $(err.timeout_seconds) seconds")
 
+# A peer whose first bytes are not the REPLicant magic: another tool probing the
+# port (an HTTP health check, say), or a client from a pre-framing release.
+struct UnknownProtocol <: Exception
+    magic::Vector{UInt8}
+end
+Base.showerror(io::IO, err::UnknownProtocol) = print(
+    io,
+    "Unknown protocol: expected magic \"REPL\", got $(repr(String(copy(err.magic)))). $VERSION_SKEW_HELP",
+)
+
 # Run a blocking read on `sock`, closing the socket if it outlives the timeout so
 # the read unblocks with an IOError instead of hanging. The caller closes `sock`
 # again in its own `finally`; the second close is a no-op. A `nothing` timeout
@@ -124,8 +134,7 @@ end
 function _parse_header(header::Vector{UInt8}, valid_types::Tuple{Vararg{UInt8}}, max_bytes::Int)
     buffer = IOBuffer(header)
     magic = read(buffer, length(PROTOCOL_MAGIC))
-    magic == PROTOCOL_MAGIC ||
-        error("Unknown protocol: expected magic \"REPL\", got $(repr(String(magic))). $VERSION_SKEW_HELP")
+    magic == PROTOCOL_MAGIC || throw(UnknownProtocol(magic))
 
     version = read(buffer, UInt8)
     version == PROTOCOL_VERSION ||
@@ -181,9 +190,13 @@ function _reject_at_capacity(sock::IO, id, read_timeout_seconds)
 end
 
 # Log a handler failure and try to tell the client, tolerating a socket the peer
-# has already closed.
+# has already closed. A foreign peer is routine traffic and logs at debug only.
 function _reply_error(sock::IO, id::Integer, error)
-    @error "Error handling client" id error
+    if error isa UnknownProtocol
+        @debug "Rejected a peer speaking another protocol" id error
+    else
+        @error "Error handling client" id error
+    end
     try
         _write_frame(sock, RESPONSE_ERR, sprint(showerror, error))
     catch error
