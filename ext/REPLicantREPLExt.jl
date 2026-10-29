@@ -108,9 +108,11 @@ function _deparse(@nospecialize ast)
     return string(stripped)
 end
 
-# `a; b` typed on one line parses as a `:toplevel` nested inside the input's own.
+# `a; b` typed on one line parses as a `:toplevel` nested inside the input's own,
+# which newer parsers also fill with line numbers.
 _deparse_statement(@nospecialize arg) =
-    Meta.isexpr(arg, :toplevel) ? join((string(a) for a in arg.args), "; ") : string(arg)
+    Meta.isexpr(arg, :toplevel) ?
+    join((string(a) for a in arg.args if !(a isa LineNumberNode)), "; ") : string(arg)
 
 # An identity AST transform: it records the typed line into the activity log, then
 # returns its input unchanged so evaluation is unaffected. It never throws into the
