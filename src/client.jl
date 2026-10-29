@@ -320,7 +320,7 @@ function _send(
     sock = _open_request(port, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
     try
         frame = try
-            _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
+            _read_frame(sock, RESPONSE_TYPES; timeout_seconds, max_bytes = MAX_RESPONSE_BYTES)
         catch timeout
             timeout isa ReadTimeout || rethrow()
             throw(

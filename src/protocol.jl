@@ -24,6 +24,9 @@ const READ_TIMEOUT_SECONDS = 30.0
 # lets a wedged or version-skewed peer read as dead quickly.
 const PING_TIMEOUT_SECONDS = 2.0
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16MB
+# An eval's output is bounded only by what it prints. The client trusts its server,
+# so it accepts any body the header can express.
+const MAX_RESPONSE_BYTES = Int(typemax(UInt32))
 
 # Appended to magic/version mismatch errors. A peer that fails the header checks
 # is usually a client or server on a different REPLicant version, which the
