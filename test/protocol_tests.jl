@@ -381,6 +381,39 @@ end
     end
 end
 
+@testitem "rejected_request_logs_quietly" tags = [:protocol] setup = [Utilities] begin
+    import REPLicant
+    import Logging
+
+    # A request the server refuses for its content is the caller's mistake. The
+    # caller hears about it; the human at the server's prompt does not.
+    logger = Test.TestLogger(; min_level = Logging.Debug)
+    Utilities.withserver(; logger) do server, mod, port
+        err = IOBuffer()
+        @test REPLicant.cli(["reset", "--port=$port", "--module=Main"]; out = IOBuffer(), err) == 1
+        @test contains(String(take!(err)), "Main is the default session")
+    end
+    @test !any(record -> record.level >= Logging.Warn, logger.logs)
+end
+
+@testitem "hung_up_client_logs_quietly" tags = [:protocol] begin
+    import REPLicant
+    import Logging
+    import Sockets
+
+    # A client that gives up before its result, as `--timeout` does, leaves the
+    # worker writing to a closed socket. That is routine, not a server error.
+    port, listener = Sockets.listenany(0)
+    sock = Sockets.connect(Sockets.localhost, port)
+    close(sock)
+    logger = Test.TestLogger(; min_level = Logging.Debug)
+    Logging.with_logger(logger) do
+        REPLicant._reply_error(sock, 1, Base.IOError("write: broken pipe (EPIPE)", Base.UV_EPIPE))
+    end
+    close(listener)
+    @test !any(record -> record.level >= Logging.Warn, logger.logs)
+end
+
 @testitem "read_timeout_logs_quietly" tags = [:protocol] begin
     import REPLicant
     import Logging

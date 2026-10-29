@@ -233,7 +233,7 @@ end
 # "Main" would be a distinct module (`Main.Main`) shadowing that name, so reject it
 # rather than hand back a decoy the caller mistakes for the default.
 _reject_reserved_session(name::AbstractString) =
-    name == "Main" && error("Main is the default session; omit --module to use it")
+    name == "Main" && throw(RequestError("Main is the default session; omit --module to use it"))
 
 # The module a request evaluates into: the default session (the server's target)
 # when no `--module` is given, else the named session. Called by the dispatcher
@@ -256,7 +256,7 @@ end
 # collected. The default session is the process's `Main` and cannot be reset, so a
 # name is required.
 function _reset_session(srv::Server, name::AbstractString)
-    isempty(name) && error("reset needs a module name; the default session cannot be reset")
+    isempty(name) && throw(RequestError("reset needs a module name; the default session cannot be reset"))
     _reject_reserved_session(name)
     Base.@lock srv.sessions.lock srv.sessions.modules[name] = _new_session(Symbol(name))
     return "reset module $name"
