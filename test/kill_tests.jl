@@ -114,3 +114,35 @@ end
         end
     end
 end
+
+@testitem "kill_reports_surviving_process" tags = [:kill] begin
+    import REPLicant
+    import Sockets
+
+    # libuv's SIGTERM always terminates a Windows process, so only POSIX can survive it.
+    if Sys.iswindows()
+        @test true skip = true
+    else
+        # A process that ignores SIGTERM, standing in for a server that cannot act on
+        # it. Julia's own signal thread overrides `SIG_IGN`, so a shell traps it.
+        proc = run(`sh -c 'trap "" TERM; sleep 60'`; wait = false)
+        port, listener = Sockets.listenany(0)
+        try
+            mktempdir() do registry
+                withenv("REPLICANT_DIR" => registry) do
+                    path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                    write(path, replace(read(path, String), r"pid=\d+" => "pid=$(getpid(proc))"))
+
+                    out, err = IOBuffer(), IOBuffer()
+                    @test REPLicant._kill_server(["--port=$port"]; out, err) == 1
+                    @test contains(String(take!(err)), "--force")
+                    @test isfile(path)
+                    @test process_running(proc)
+                end
+            end
+        finally
+            close(listener)
+            kill(proc, Base.SIGKILL)
+        end
+    end
+end
