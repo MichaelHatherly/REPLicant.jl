@@ -89,7 +89,8 @@ function _uninstall_routing!()
     ROUTING_INSTALLED[] || return nothing
     redirect_stdout(REAL_OUT[])
     redirect_stderr(REAL_ERR[])
-    popdisplay()
+    # The REPL may have pushed its own display on top since routing was installed.
+    popdisplay(RouterDisplay())
     ROUTING_INSTALLED[] = false
     return nothing
 end
