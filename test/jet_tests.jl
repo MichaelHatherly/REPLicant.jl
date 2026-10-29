@@ -7,15 +7,15 @@
         # Basic static analysis over REPLicant's own module. A no-method branch
         # or a type-level regression fails here rather than at runtime. Runs on
         # every stable Julia; JET resolves a version-appropriate release per one.
-        JET.test_package(REPLicant; target_defined_modules = true, mode = :basic)
+        JET.test_package(REPLicant; target_modules = (REPLicant,), mode = :basic)
 
         # Sound mode and the optimization analyzer flag more, much of it
         # intentional dynamic dispatch (eval over `Any`, socket IO). Rather than
         # gate at zero, ratchet: cap the count so it can only fall. Lower a limit
         # when the count drops; never raise one without a reason. Counts depend on
-        # the Julia and JET versions (JET 0.10 on Julia 1.12), so the ratchet runs
+        # the Julia and JET versions (JET 0.13 on Julia 1.13), so the ratchet runs
         # only there.
-        JET_JULIA = v"1.12"
+        JET_JULIA = v"1.13"
         # The count is intentional dynamic dispatch: eval over `Any`, sound-mode
         # `getfield`/`setfield` on the `cli`/parser NamedTuples and the server's
         # `busy_since`/`interrupt_signal`, and abstract-IO `write`/`show` across the
@@ -46,12 +46,12 @@
         # cohort in the same category: `_parse_number`'s predicate-callable dispatch,
         # the `head_lines`/`tail_lines` keyword-NamedTuple dispatch through `_send`,
         # and `_elide`'s `split`/`join` over the abstract-IO response body.
-        SOUND_LIMIT = 453   # JET.report_package(REPLicant; mode = :sound)
+        SOUND_LIMIT = 367   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
             sound = JET.get_reports(
-                JET.report_package(REPLicant; target_defined_modules = true, mode = :sound),
+                JET.report_package(REPLicant; target_modules = (REPLicant,), mode = :sound),
             )
             length(sound) < SOUND_LIMIT &&
                 @info "JET sound below limit; lower SOUND_LIMIT to $(length(sound))"
