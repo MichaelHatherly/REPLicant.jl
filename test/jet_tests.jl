@@ -55,8 +55,9 @@
         # request token adds a keyword to the registry writers and an `Unauthorized`
         # branch to `_reply_error`'s test of an `Any`-typed error. The shared registry
         # scan adds the prune and label scans' `==` of an entry's `project` field
-        # against an `AbstractString` argument.
-        SOUND_LIMIT = 705   # JET.report_package(REPLicant; mode = :sound)
+        # against an `AbstractString` argument. Revising inside `_handle_eval` adds
+        # the result's typeassert after the `__revise` extension point.
+        SOUND_LIMIT = 707   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

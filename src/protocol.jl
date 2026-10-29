@@ -260,7 +260,7 @@ function _handle_eval(
         verbose && @info "Received code" id code = Text(code)
 
         # Revise inside the `try`, so a failed revision reaches the client as an error.
-        result = _revise(_evaluate_request, code, id, mod, dir)
+        result = _revise(_evaluate_request, code, id, mod, dir)::@NamedTuple{output::String, errored::Bool}
         _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
 
         verbose && @info "Sent result" id result = Text(result.output)
