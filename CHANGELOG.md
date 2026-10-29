@@ -42,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Hide the value of an eval whose code ends in `;`, as the REPL does. `julia +rpc -e 'y = 1;'` printed `1`. Printed output still comes through, and a `;` inside a string or followed by a comment is read the way the REPL reads it [#76]
+- Keep the footer on the server it was enabled for. It read the process's current server, which every `Server` constructor overwrites, so running the test suite in a warm session showed each test's server in the row and then "no server" once that server closed [#75]
+- Refuse a `--dir` that does not exist with "no such directory: <path>". The eval failed inside `cd`, and the client printed the raw `Base.IOError(...)` repr while the server logged it as an evaluation error [#74]
+- Refuse `reset --module <name>` for a session no eval has created, and refuse a `--module` name that is not a Julia identifier. A typo in a reset printed "reset module ..." and created an empty session, and `--module 'bad name!'` made a module no code can name [#73]
+- Stop logging `Error handling client` into the REPL for a request the caller got wrong, such as `reset --module Main`, or for a client that hung up before its result. The caller already gets the rejection, and a client whose `--timeout` expired is routine. Its hang-up also printed a second `@error` when the error reply failed on the closed socket [#72]
+- Report a server that exits during an eval. `exit()` in an eval stops the shared server, and the client said only "server closed the connection without a response". When the dropped connection's port now refuses, the client says the server exited and that `exit` in an eval is the usual cause [#71]
+- Warn in the `--timeout` expiry message that later evals queue behind the one still running. The worker is sequential, so the next call waits until the timed-out eval finishes or is interrupted, and nothing told the caller why it stalled [#70]
+- Precompile the client for the streams it runs on. The workload only reached `cli` with IOBuffer streams, so a client whose stdout or stderr was a pipe or a file, as every agent call is, compiled `cli` and `_send` at runtime. That took a `julia +rpc -e '1 + 1'` from about 0.2s to 0.7s, slower than a cold `julia` [#69]
 - Stop logging errors into the REPL for a peer that stalls past the read timeout. The timeout closes the socket, so the server's error reply always failed, and each stalled connection printed two `@error` records at the human's prompt [#67]
 - Count lines correctly in `--head-lines` and `--tail-lines` when the output ends in a newline. The empty string after the final newline counted as a line, so `--tail-lines=2` kept only one line of printed output and `--head-lines` reported an elision that removed nothing [#66]
 - Remove only REPLicant's own display when a server shuts down. With the server started from `startup.jl`, the REPL pushes its display afterwards, and closing the server popped the REPL's display while leaving REPLicant's behind [#65]
@@ -137,3 +145,11 @@ Initial Public Release
 [#65]: https://github.com/MichaelHatherly/REPLicant.jl/issues/65
 [#66]: https://github.com/MichaelHatherly/REPLicant.jl/issues/66
 [#67]: https://github.com/MichaelHatherly/REPLicant.jl/issues/67
+[#69]: https://github.com/MichaelHatherly/REPLicant.jl/issues/69
+[#70]: https://github.com/MichaelHatherly/REPLicant.jl/issues/70
+[#71]: https://github.com/MichaelHatherly/REPLicant.jl/issues/71
+[#72]: https://github.com/MichaelHatherly/REPLicant.jl/issues/72
+[#73]: https://github.com/MichaelHatherly/REPLicant.jl/issues/73
+[#74]: https://github.com/MichaelHatherly/REPLicant.jl/issues/74
+[#75]: https://github.com/MichaelHatherly/REPLicant.jl/issues/75
+[#76]: https://github.com/MichaelHatherly/REPLicant.jl/issues/76

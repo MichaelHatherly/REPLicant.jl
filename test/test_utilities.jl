@@ -81,6 +81,7 @@
             func;
             max_connections::Int = 100,
             read_timeout_seconds::Float64 = 30.0,
+            logger = Test.TestLogger(),
         )
         mod = Module()
         # The running server evaluates in `Main`, which carries the module-local
@@ -92,7 +93,6 @@
             registry = mktempdir()
             withenv("REPLICANT_DIR" => registry) do
                 cd(tmp) do
-                    logger = Test.TestLogger()
                     Logging.with_logger(logger) do
                         server =
                             REPLicant.Server(mod; max_connections, read_timeout_seconds)

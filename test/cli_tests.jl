@@ -165,11 +165,34 @@ end
         @test code == 1
         @test elapsed < 2
         @test isempty(String(take!(out)))
-        # The error names the timeout and points at kill as the recovery.
+        # The error names the timeout, warns that later evals wait behind the one
+        # still running, and points at kill as the recovery.
         message = String(take!(err))
+        @test contains(message, "later evals wait")
         @test contains(message, "kill")
         # The server is still alive: pings are answered off the wedged worker.
         @test REPLicant._ping(port)
+    end
+end
+
+@testitem "client_reports_server_exit" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # `exit` in an eval ends the shared server. The client says so instead of
+    # reporting a bare dropped connection.
+    mktempdir() do registry
+        mktempdir() do work
+            Utilities.spawn_server(registry, work) do port, pid
+                err = IOBuffer()
+                withenv("REPLICANT_DIR" => registry) do
+                    # The entry is written before a cold subprocess can answer a
+                    # ping, and `cli` checks the port with one before it sends.
+                    @test timedwait(() -> REPLicant._ping(port), 60.0) === :ok
+                    @test REPLicant.cli(["--port=$port", "-e", "exit(3)"]; err) == 1
+                end
+                @test contains(String(take!(err)), "the server exited during the eval")
+            end
+        end
     end
 end
 
@@ -400,6 +423,22 @@ end
     end
 end
 
+@testitem "client_refuses_missing_dir" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+    import Logging
+
+    # A `--dir` that does not exist is the caller's mistake: a plain message for the
+    # caller, nothing in the server's log.
+    logger = Test.TestLogger(; min_level = Logging.Debug)
+    Utilities.withserver(; logger) do server, mod, port
+        missing_dir = joinpath(mktempdir(), "gone")
+        err = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--dir=$missing_dir", "-e", "1"]; out = IOBuffer(), err) == 1
+        @test strip(String(take!(err))) == "no such directory: $missing_dir"
+    end
+    @test !any(record -> record.level >= Logging.Warn, logger.logs)
+end
+
 @testitem "client_module_isolation" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
@@ -465,6 +504,29 @@ end
         @test REPLicant.cli(["--port=$port", "--module=work", "-e", "z"]; out = got, err = IOBuffer()) == 0
         @test strip(String(take!(got))) == "7"
         @test REPLicant.cli(["reset", "--port=$port", "--module=work"]; out = IOBuffer()) == 0
+    end
+end
+
+@testitem "reset_refuses_unknown_session" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # A session that was never created has nothing to reset; a typo in the name
+    # should not read as success.
+    Utilities.withserver() do server, mod, port
+        err = IOBuffer()
+        @test REPLicant.cli(["reset", "--port=$port", "--module=nosuch"]; out = IOBuffer(), err) == 1
+        @test contains(String(take!(err)), "no session named nosuch")
+    end
+end
+
+@testitem "rejects_non_identifier_session_name" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # A session is a module, so its name must be one Julia can spell.
+    Utilities.withserver() do server, mod, port
+        err = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=bad name!", "-e", "1"]; out = IOBuffer(), err) == 1
+        @test contains(String(take!(err)), "not a valid module name")
     end
 end
 
@@ -885,4 +947,27 @@ end
     text = "1\n2\n3\n4\n5\n"
     @test REPLicant._elide(text, nothing, 2) == "…(3 lines elided)\n4\n5\n"
     @test REPLicant._elide(text, 5, nothing) == text
+end
+
+@testitem "client_precompiled_for_pipes" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # An agent runs the client with stdout and stderr on pipes. Any REPLicant method
+    # compiled at runtime there is JIT cost the client pays on every call. The
+    # subprocess runs unbounded, so build its image first, as `start` does.
+    project = pkgdir(REPLicant)
+    run(
+        pipeline(
+            `julia --project=$project --startup-file=no -e "using REPLicant"`;
+            stdout = devnull,
+            stderr = devnull,
+        ),
+    )
+    client = joinpath(project, "bin", "client.jl")
+    Utilities.withserver() do server, mod, port
+        trace = tempname()
+        cmd = `julia --project=$project --startup-file=no --trace-compile=stderr $client --port=$port -e "1 + 1"`
+        @test strip(read(pipeline(cmd; stderr = trace), String)) == "2"
+        @test filter(contains("REPLicant."), readlines(trace)) == String[]
+    end
 end

@@ -21,6 +21,7 @@ module REPLicant
 # Imports.
 #
 
+import Base.JuliaSyntax
 import Dates
 import Logging
 import PrecompileTools

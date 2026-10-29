@@ -145,6 +145,13 @@ Base.showerror(io::IO, ::Unauthorized) = print(
     "Unauthorized: the request did not carry this server's token. A client reads it from the server's registry entry.",
 )
 
+# A request refused for what it asks, such as a reserved session name. The caller
+# made the mistake and hears about it; the server has nothing to log.
+struct RequestError <: Exception
+    msg::String
+end
+Base.showerror(io::IO, error::RequestError) = print(io, error.msg)
+
 _write_request(io::IO, token::String, type::UInt8, body::String) =
     _write_frame(io, type, string(token, body))
 
@@ -243,9 +250,11 @@ function _reply_error(sock::IO, id::Integer, error)
         @debug "Rejected a peer speaking another protocol" id error
     elseif error isa Unauthorized
         @warn "Rejected a request without this server's token" id
-    elseif error isa ReadTimeout
-        # Routine for a stalled peer, and the timeout closed the socket, so there is
-        # no one left to reply to.
+    elseif error isa RequestError
+        @debug "Rejected a request" id error
+    elseif error isa ReadTimeout || error isa Base.IOError
+        # Routine for a stalled peer or one that hung up, such as a client whose
+        # `--timeout` expired. The socket is closed, so there is no one to reply to.
         return nothing
     else
         @error "Error handling client" id error

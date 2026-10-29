@@ -330,12 +330,13 @@ function _send(
             throw(
                 ErrorException(
                     "evaluation did not respond within $(timeout.timeout_seconds)s; \
-                    the eval is still running on the server. Free it with: \
+                    the eval is still running on the server, and later evals wait \
+                    behind it. Free it with: \
                     julia +rpc interrupt (or julia +rpc kill to stop the process).",
                 ),
             )
         end
-        isnothing(frame) && error("server closed the connection without a response")
+        isnothing(frame) && error(_dropped_message(port))
         body = _elide(frame.body, head_lines, tail_lines)
         if frame.type == RESPONSE_ERR
             _write_payload(err, body)
@@ -346,6 +347,14 @@ function _send(
     finally
         close(sock)
     end
+end
+
+# A dropped eval connection on a port that now refuses means the process ended,
+# most often through `exit` in the eval itself, and the session went with it.
+function _dropped_message(port::Integer)
+    _accepting(port) && return "server closed the connection without a response"
+    return "the server exited during the eval, taking its session with it. \
+        `exit` in an eval stops the shared server; start a new one to continue."
 end
 
 # Render a pong body as a status: empty is idle, a timestamp is busy with elapsed

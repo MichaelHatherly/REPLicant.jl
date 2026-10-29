@@ -50,3 +50,17 @@ PrecompileTools.@setup_workload begin
         end
     end
 end
+
+# `cli` specializes on its streams, and the client's stdout and stderr are each a
+# terminal, a pipe, or a file depending on how it is run. The workload above only
+# reaches IOBuffer, so compile every pairing the entry point can see. `cli` reaches
+# `_send` by runtime dispatch over its optional flags; cover the call with no flags.
+precompile(cli, ())
+for out in (Base.TTY, Base.PipeEndpoint, IOStream), err in (Base.TTY, Base.PipeEndpoint, IOStream)
+    precompile(Core.kwcall, (NamedTuple{(:out, :err), Tuple{out, err}}, typeof(cli), Vector{String}))
+    send_kwargs = NamedTuple{
+        (:out, :err, :timeout_seconds, :cwd, :mod, :head_lines, :tail_lines),
+        Tuple{out, err, Nothing, String, String, Nothing, Nothing},
+    }
+    precompile(Core.kwcall, (send_kwargs, typeof(_send), Int, String))
+end
