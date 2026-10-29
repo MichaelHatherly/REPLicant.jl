@@ -223,6 +223,18 @@ REPLicant executes arbitrary code with full system access.
 - `max_connections` (default 100) bounds concurrent connections
 - At capacity, new connections receive `ERROR: Server at capacity, please retry`
 
+### Limits
+
+- Evals run one at a time. When `--timeout` expires, the eval keeps running on
+  the server and later evals wait behind it. Free it with `julia +rpc interrupt`.
+- `interrupt` is cooperative. Code that never yields, such as `while true; end`,
+  ignores it, and SIGINT too. Only `julia +rpc kill --force` stops it, and that
+  ends the session.
+- `exit()` in an eval stops the shared server. The client reports that the server
+  exited.
+- A client killed with SIGTERM prints a signal report and stack trace. Julia's own
+  signal handler prints it, as for any Julia process.
+
 ## Development
 
 ### Running tests
