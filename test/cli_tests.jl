@@ -854,3 +854,14 @@ end
         end
     end
 end
+
+@testitem "client_receives_output_over_request_cap" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.withserver() do server, mod, port
+        bytes = REPLicant.MAX_REQUEST_BYTES + 1
+        out = IOBuffer()
+        @test REPLicant.cli(["-e", "print(repeat('a', $bytes))"]; out) == 0
+        @test count(==(UInt8('a')), take!(out)) == bytes
+    end
+end
