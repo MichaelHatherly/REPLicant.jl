@@ -243,6 +243,10 @@ function _reply_error(sock::IO, id::Integer, error)
         @debug "Rejected a peer speaking another protocol" id error
     elseif error isa Unauthorized
         @warn "Rejected a request without this server's token" id
+    elseif error isa ReadTimeout
+        # Routine for a stalled peer, and the timeout closed the socket, so there is
+        # no one left to reply to.
+        return nothing
     else
         @error "Error handling client" id error
     end
