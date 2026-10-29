@@ -125,7 +125,7 @@ from `startup.jl` alongside the server, or at the prompt at any time.
 # The server the footer reports: the one current when it was enabled, so servers
 # started later in the process (a test suite's) never take the row over. Once that
 # server stops, whichever is current.
-_footer_target(session) =
+_footer_target(session::Union{Server, Nothing}) =
     isnothing(session) || istaskdone(session.task) ? CURRENT_SERVER[] : session
 
 function footer!(on::Bool = true)
