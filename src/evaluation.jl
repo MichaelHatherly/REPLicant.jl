@@ -345,29 +345,12 @@ end
 # nested signals compose; the worker is sequential today, so depth is 0 or 1.
 const REMOTE_EVAL_DEPTH = Threads.Atomic{Int}(0)
 
-# True while at least one remote evaluation is running. Read from the REPL render
-# thread by the prompt; the atomic gives a consistent value.
+# True while at least one remote evaluation is running. Read from the footer's
+# upkeep task; the atomic gives a consistent value.
 _is_busy() = REMOTE_EVAL_DEPTH[] > 0
 
-# One animation frame of a busy prompt, generic across REPL modes. `base` is the
-# idle prompt text (`"julia> "`, `"pkg> "`, `"help?> "`, ...); `marker` is its
-# last non-blank glyph, the `>`-style cursor common to every mode. A `_` sweeps
-# through the label before the marker, swapping one width-1 glyph for another, so
-# `textwidth(base)` holds and the cursor never shifts.
-function _busy_frame(base::AbstractString, n::Int)
-    chars = collect(Char, base)
-    marker = length(chars)
-    while marker > 0 && isspace(chars[marker])
-        marker -= 1
-    end
-    marker == 0 && return String(chars)
-    span = max(marker - 1, 1)
-    chars[mod(n, span) + 1] = '_'
-    return String(chars)
-end
-
 # Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
-# `__notify_busy(::Nothing)` to recolor the prompt and set the terminal title.
+# `__notify_busy(::Nothing)` to set the terminal title.
 # Without REPL the `::Any` fallback does nothing.
 function _notify_busy(delta::Int)
     Threads.atomic_add!(REMOTE_EVAL_DEPTH, delta)
@@ -379,8 +362,8 @@ function _notify_busy(delta::Int)
 end
 __notify_busy(::Any) = nothing
 
-# Evaluate a remote request while signaling the prompt that work is in flight.
-# Pings never reach here, so the indicator reflects only real evaluations.
+# Evaluate a remote request while signaling that work is in flight. Pings never
+# reach here, so the indicator reflects only real evaluations.
 function _evaluate_request(code::AbstractString, id::Integer, mod::Module, dir::AbstractString)
     _notify_busy(1)
     return try
