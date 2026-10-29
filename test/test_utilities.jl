@@ -9,7 +9,8 @@
     # default to empty: keep the server's cwd and the default module).
     function sendframe(sock, code; cwd = "", mod = "")
         body = REPLicant._encode_eval_body(; cwd, mod, code)
-        REPLicant._write_frame(sock, REPLicant.REQUEST_EVAL, body)
+        token = REPLicant._entry_token(Int(Sockets.getpeername(sock)[2]))
+        REPLicant._write_request(sock, token, REPLicant.REQUEST_EVAL, body)
         return sock
     end
 
@@ -45,14 +46,15 @@
     end
 
     # Send an arbitrary typed frame and return the full response frame. An eval
-    # body is encoded to the v2 layout; other types carry the raw body.
-    function requestframe(port, type, body)
+    # body is encoded to the v2 layout; other types carry the raw body. `token`
+    # defaults to the one the server registered.
+    function requestframe(port, type, body; token = REPLicant._entry_token(port))
         sock = Sockets.connect(Sockets.localhost, port)
         try
             payload =
                 type == REPLicant.REQUEST_EVAL ?
                 REPLicant._encode_eval_body(; cwd = "", mod = "", code = body) : body
-            REPLicant._write_frame(sock, type, payload)
+            REPLicant._write_request(sock, token, type, payload)
             return readframe(sock)
         finally
             close(sock)

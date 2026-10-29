@@ -192,9 +192,10 @@ server and cleans up the same way.
 
 1. The server lets the OS assign a free port and listens for
    length-prefixed requests.
-2. It registers itself in a shared directory (`$REPLICANT_DIR`, else
-   `tempdir()/replicant`), one `key=value` file per live server. The client reads
-   that directory to find and select a target.
+2. It registers itself in an owner-only directory (`$REPLICANT_DIR`, else
+   `tempdir()/replicant-<uid>`, or `tempdir()/replicant` on Windows), one
+   `key=value` file per live server. The client reads that directory to find and
+   select a target.
 3. Code runs in a persistent module with `include_string`, so state survives
    between calls.
 4. With Revise loaded, changed code reloads before each request.
@@ -206,7 +207,13 @@ server and cleans up the same way.
 REPLicant executes arbitrary code with full system access.
 
 - Only run it in trusted environments
-- The server has no authentication or authorization
+- The server listens on loopback only. Each server generates a random token at
+  startup and writes it into its registry entry. A request without that token is
+  rejected, so another local user cannot run code through your port.
+- On Unix the registry directory is forced to mode `0700`. REPLicant refuses a
+  registry directory owned by another user.
+- Anything running as your user can read the token, the same way it could read
+  your files
 - Executed code has the same permissions as the Julia process
 
 ### Concurrency

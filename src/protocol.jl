@@ -10,8 +10,9 @@
 #   body     length bytes          UTF-8
 #
 # Request types are `eval`/`ping`/`interrupt`/`reset`/`log`, response types
-# `ok`/`err`/`pong`. An `eval` body is structured (see `_encode_eval_body`); the
-# others are a name, a count, or empty. The type code is an open enum: new codes (a
+# `ok`/`err`/`pong`. Every request body opens with the server's token (see
+# `_read_request`). After it, an `eval` body is structured (see `_encode_eval_body`);
+# the others are a name, a count, or empty. The type code is an open enum: new codes (a
 # `log` query, a serialized value, a MIME bundle) extend the protocol without a
 # format break. Every read validates magic, version, type, and length before
 # trusting the body.
@@ -30,7 +31,7 @@ const MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16MB
 const VERSION_SKEW_HELP = "The client and server may be running different REPLicant versions. Reinstall the rpc channel: julia -e 'using REPLicant; REPLicant.install_channel(force = true)'"
 
 const PROTOCOL_MAGIC = Vector{UInt8}("REPL")
-const PROTOCOL_VERSION = 0x02
+const PROTOCOL_VERSION = 0x03
 const FRAME_HEADER_BYTES = length(PROTOCOL_MAGIC) + 6  # magic + version + type + UInt32 length
 
 const REQUEST_EVAL = 0x01
@@ -129,6 +130,49 @@ function _write_frame(io::IO, type::UInt8, body::String)
     return nothing
 end
 
+# Any local process can reach a loopback port, so a request proves it may run code
+# by carrying the token from the server's registry entry, which only the owner can
+# read. 32 random bytes, hex-encoded.
+const TOKEN_LENGTH = 64
+_new_token() = bytes2hex(rand(Random.RandomDevice(), UInt8, TOKEN_LENGTH ÷ 2))
+
+struct Unauthorized <: Exception end
+Base.showerror(io::IO, ::Unauthorized) = print(
+    io,
+    "Unauthorized: the request did not carry this server's token. A client reads it from the server's registry entry.",
+)
+
+_write_request(io::IO, token::String, type::UInt8, body::String) =
+    _write_frame(io, type, string(token, body))
+
+# Read a request frame and check its token, returning the frame with the token
+# stripped from its body. The comparison runs in constant time.
+function _read_request(sock::IO, token::String, timeout_seconds::Float64)
+    frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds)
+    isnothing(frame) && return nothing
+    bytes = codeunits(frame.body)
+    length(bytes) >= TOKEN_LENGTH || throw(Unauthorized())
+    mismatch = 0x00
+    for (actual, expected) in zip(bytes, codeunits(token))
+        mismatch |= actual ⊻ expected
+    end
+    mismatch == 0x00 || throw(Unauthorized())
+    return (; frame.type, body = String(bytes[(TOKEN_LENGTH + 1):end]))
+end
+
+# Connect to the server on `port` and send one request carrying its registered
+# token. Returns the socket for the caller to read the reply from and close.
+function _open_request(port::Integer, type::UInt8, body::String)
+    sock = Sockets.connect(Sockets.localhost, port)
+    try
+        _write_request(sock, _entry_token(port), type, body)
+    catch
+        close(sock)
+        rethrow()
+    end
+    return sock
+end
+
 # Validate a frame header and return its `(type, body_length)`. Throws on any
 # compliance violation: bad magic, wrong version, unknown type, oversized body.
 function _parse_header(header::Vector{UInt8}, valid_types::Tuple{Vararg{UInt8}}, max_bytes::Int)
@@ -194,6 +238,8 @@ end
 function _reply_error(sock::IO, id::Integer, error)
     if error isa UnknownProtocol
         @debug "Rejected a peer speaking another protocol" id error
+    elseif error isa Unauthorized
+        @warn "Rejected a request without this server's token" id
     else
         @error "Error handling client" id error
     end
