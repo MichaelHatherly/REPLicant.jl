@@ -491,6 +491,29 @@ end
     end
 end
 
+@testitem "reset_refuses_unknown_session" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # A session that was never created has nothing to reset; a typo in the name
+    # should not read as success.
+    Utilities.withserver() do server, mod, port
+        err = IOBuffer()
+        @test REPLicant.cli(["reset", "--port=$port", "--module=nosuch"]; out = IOBuffer(), err) == 1
+        @test contains(String(take!(err)), "no session named nosuch")
+    end
+end
+
+@testitem "rejects_non_identifier_session_name" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # A session is a module, so its name must be one Julia can spell.
+    Utilities.withserver() do server, mod, port
+        err = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--module=bad name!", "-e", "1"]; out = IOBuffer(), err) == 1
+        @test contains(String(take!(err)), "not a valid module name")
+    end
+end
+
 @testitem "select_entry_refuses_cross_project" tags = [:cli] begin
     import REPLicant
 

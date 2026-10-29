@@ -229,11 +229,15 @@ function _new_session(sym::Symbol)
     return mod
 end
 
-# The default session is addressed by omitting `--module`. A named session called
-# "Main" would be a distinct module (`Main.Main`) shadowing that name, so reject it
-# rather than hand back a decoy the caller mistakes for the default.
-_reject_reserved_session(name::AbstractString) =
+# A session is a module, so its name must be an identifier. The default session is
+# addressed by omitting `--module`. A named session called "Main" would be a
+# distinct module (`Main.Main`) shadowing that name, so reject it rather than hand
+# back a decoy the caller mistakes for the default.
+function _check_session_name(name::AbstractString)
+    Base.isidentifier(name) || throw(RequestError("$(repr(name)) is not a valid module name"))
     name == "Main" && throw(RequestError("Main is the default session; omit --module to use it"))
+    return nothing
+end
 
 # The module a request evaluates into: the default session (the server's target)
 # when no `--module` is given, else the named session. Called by the dispatcher
@@ -241,7 +245,7 @@ _reject_reserved_session(name::AbstractString) =
 # can swap it.
 function _request_module(srv::Server, name::AbstractString)
     isempty(name) && return srv.mod()
-    _reject_reserved_session(name)
+    _check_session_name(name)
     return _session_module(srv.sessions, name)
 end
 
@@ -254,11 +258,14 @@ end
 # Replace the named session with a fresh, empty module, giving a clean slate
 # without restarting the process. The old module is unreferenced and gets
 # collected. The default session is the process's `Main` and cannot be reset, so a
-# name is required.
+# name is required. A name no eval has used is refused, so a typo does not pass.
 function _reset_session(srv::Server, name::AbstractString)
     isempty(name) && throw(RequestError("reset needs a module name; the default session cannot be reset"))
-    _reject_reserved_session(name)
-    Base.@lock srv.sessions.lock srv.sessions.modules[name] = _new_session(Symbol(name))
+    _check_session_name(name)
+    Base.@lock srv.sessions.lock begin
+        haskey(srv.sessions.modules, name) || throw(RequestError("no session named $name"))
+        srv.sessions.modules[name] = _new_session(Symbol(name))
+    end
     return "reset module $name"
 end
 
