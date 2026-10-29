@@ -175,6 +175,24 @@ end
     end
 end
 
+@testitem "client_reports_server_exit" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # `exit` in an eval ends the shared server. The client says so instead of
+    # reporting a bare dropped connection.
+    mktempdir() do registry
+        mktempdir() do work
+            Utilities.spawn_server(registry, work) do port, pid
+                err = IOBuffer()
+                withenv("REPLICANT_DIR" => registry) do
+                    @test REPLicant.cli(["--port=$port", "-e", "exit(3)"]; err) == 1
+                end
+                @test contains(String(take!(err)), "the server exited during the eval")
+            end
+        end
+    end
+end
+
 @testitem "status_formatting" tags = [:cli] begin
     import REPLicant
     import Dates

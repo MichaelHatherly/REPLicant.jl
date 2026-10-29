@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report a server that exits during an eval. `exit()` in an eval stops the shared server, and the client said only "server closed the connection without a response". When the dropped connection's port now refuses, the client says the server exited and that `exit` in an eval is the usual cause [#71]
 - Warn in the `--timeout` expiry message that later evals queue behind the one still running. The worker is sequential, so the next call waits until the timed-out eval finishes or is interrupted, and nothing told the caller why it stalled [#70]
 - Precompile the client for the streams it runs on. The workload only reached `cli` with IOBuffer streams, so a client whose stdout or stderr was a pipe or a file, as every agent call is, compiled `cli` and `_send` at runtime. That took a `julia +rpc -e '1 + 1'` from about 0.2s to 0.7s, slower than a cold `julia` [#69]
 - Stop logging errors into the REPL for a peer that stalls past the read timeout. The timeout closes the socket, so the server's error reply always failed, and each stalled connection printed two `@error` records at the human's prompt [#67]
@@ -141,3 +142,4 @@ Initial Public Release
 [#67]: https://github.com/MichaelHatherly/REPLicant.jl/issues/67
 [#69]: https://github.com/MichaelHatherly/REPLicant.jl/issues/69
 [#70]: https://github.com/MichaelHatherly/REPLicant.jl/issues/70
+[#71]: https://github.com/MichaelHatherly/REPLicant.jl/issues/71
