@@ -330,7 +330,8 @@ function _send(
             throw(
                 ErrorException(
                     "evaluation did not respond within $(timeout.timeout_seconds)s; \
-                    the eval is still running on the server. Free it with: \
+                    the eval is still running on the server, and later evals wait \
+                    behind it. Free it with: \
                     julia +rpc interrupt (or julia +rpc kill to stop the process).",
                 ),
             )

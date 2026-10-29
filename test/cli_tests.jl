@@ -165,8 +165,10 @@ end
         @test code == 1
         @test elapsed < 2
         @test isempty(String(take!(out)))
-        # The error names the timeout and points at kill as the recovery.
+        # The error names the timeout, warns that later evals wait behind the one
+        # still running, and points at kill as the recovery.
         message = String(take!(err))
+        @test contains(message, "later evals wait")
         @test contains(message, "kill")
         # The server is still alive: pings are answered off the wedged worker.
         @test REPLicant._ping(port)
