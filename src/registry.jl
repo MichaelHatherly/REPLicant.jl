@@ -53,15 +53,21 @@ function _registry_entries()
     for fname in readdir(dir)
         all(isdigit, fname) || continue
         path = joinpath(dir, fname)
-        fields = try
-            _parse_registry_entry(path)
-        catch error
-            (error isa SystemError && !isfile(path)) || rethrow()
-            continue
-        end
-        push!(entries, (path, fields))
+        fields = _read_registry_entry(path)
+        isnothing(fields) || push!(entries, (path, fields))
     end
     return entries
+end
+
+# The entry at `path`, or `nothing` when there is none: never written, or removed by
+# a concurrent prune or shutdown before the read.
+function _read_registry_entry(path::AbstractString)
+    return try
+        _parse_registry_entry(path)
+    catch error
+        (error isa SystemError && !isfile(path)) || rethrow()
+        nothing
+    end
 end
 
 function _parse_registry_entry(path::AbstractString)
@@ -101,9 +107,8 @@ end
 # The token the server on `port` registered, or empty when it has no entry. An
 # empty token fails the server's check like any wrong one.
 function _entry_token(port::Integer)
-    path = _registry_entry_path(port)
-    isfile(path) || return ""
-    return get(_parse_registry_entry(path), "token", "")
+    fields = _read_registry_entry(_registry_entry_path(port))
+    return isnothing(fields) ? "" : get(fields, "token", "")
 end
 
 # Probe a server with a ping frame. Returns the pong body (a busy-since marker,

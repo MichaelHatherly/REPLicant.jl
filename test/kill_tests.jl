@@ -66,7 +66,7 @@ end
         close(listener)
         mktempdir() do registry
             withenv("REPLICANT_DIR" => registry) do
-                path = REPLicant._write_registry_entry(port, "/work/a")
+                path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
                 write(path, replace(read(path, String), r"pid=\d+" => "pid=$(getpid(proc))"))
 
                 out = IOBuffer()

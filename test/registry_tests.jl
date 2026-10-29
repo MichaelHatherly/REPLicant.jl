@@ -3,7 +3,7 @@
 
     mktempdir() do registry
         withenv("REPLICANT_DIR" => registry) do
-            REPLicant._write_registry_entry(9001, "/work/a")
+            REPLicant._write_registry_entry(9001, "/work/a"; token = "")
             # An atomic write in progress leaves its temp file beside the entries.
             cp(joinpath(registry, "9001"), joinpath(registry, "9001.tmp.123"))
 
@@ -17,13 +17,14 @@ end
 
     mktempdir() do registry
         withenv("REPLICANT_DIR" => registry) do
-            REPLicant._write_registry_entry(9001, "/work/a")
+            REPLicant._write_registry_entry(9001, "/work/a"; token = "")
             # Listed by `readdir`, gone by the time it is opened.
             symlink(joinpath(registry, "removed"), joinpath(registry, "9002"))
 
             @test [entry.port for entry in REPLicant._read_entries()] == [9001]
             @test REPLicant._label_conflict("/work/a", "x", 0) === nothing
             @test REPLicant._prune_dead_entries("/work/a") === nothing
+            @test REPLicant._entry_token(9002) == ""
         end
     end
 end
@@ -38,7 +39,7 @@ end
             # pong ever comes, like a server wedged on its only thread.
             port, listener = Sockets.listenany(0)
             try
-                path = REPLicant._write_registry_entry(port, "/work/a")
+                path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
 
                 @test isempty(REPLicant._live_entries())
                 @test isfile(path)
@@ -65,7 +66,7 @@ end
         withenv("REPLICANT_DIR" => registry) do
             port, listener = Sockets.listenany(0)
             close(listener)
-            path = REPLicant._write_registry_entry(port, "/work/a")
+            path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
 
             @test isempty(REPLicant._live_entries())
             @test !isfile(path)
