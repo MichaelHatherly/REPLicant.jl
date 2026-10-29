@@ -102,10 +102,14 @@ function _deparse(@nospecialize ast)
     # `remove_linenums!` clears line nodes inside blocks but leaves those sitting
     # directly in a `:toplevel` (multi-statement input), so drop them here.
     stripped.head === :toplevel && return join(
-        (string(arg) for arg in stripped.args if !(arg isa LineNumberNode)), '\n',
+        (_deparse_statement(arg) for arg in stripped.args if !(arg isa LineNumberNode)), '\n',
     )
     return string(stripped)
 end
+
+# `a; b` typed on one line parses as a `:toplevel` nested inside the input's own.
+_deparse_statement(@nospecialize arg) =
+    Meta.isexpr(arg, :toplevel) ? join((string(a) for a in arg.args), "; ") : string(arg)
 
 # An identity AST transform: it records the typed line into the activity log, then
 # returns its input unchanged so evaluation is unaffected. It never throws into the
