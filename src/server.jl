@@ -457,6 +457,8 @@ function _dispatch(
             # Resolve the target module now, while accepting the request, so a later
             # reset cannot change which module this eval runs in.
             mod = _request_module(srv, decoded.mod)
+            isempty(decoded.cwd) || isdir(decoded.cwd) ||
+                throw(RequestError("no such directory: $(decoded.cwd)"))
             put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
             enqueued = true
         end

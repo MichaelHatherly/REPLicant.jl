@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Refuse a `--dir` that does not exist with "no such directory: <path>". The eval failed inside `cd`, and the client printed the raw `Base.IOError(...)` repr while the server logged it as an evaluation error [#74]
 - Refuse `reset --module <name>` for a session no eval has created, and refuse a `--module` name that is not a Julia identifier. A typo in a reset printed "reset module ..." and created an empty session, and `--module 'bad name!'` made a module no code can name [#73]
 - Stop logging `Error handling client` into the REPL for a request the caller got wrong, such as `reset --module Main`, or for a client that hung up before its result. The caller already gets the rejection, and a client whose `--timeout` expired is routine. Its hang-up also printed a second `@error` when the error reply failed on the closed socket [#72]
 - Report a server that exits during an eval. `exit()` in an eval stops the shared server, and the client said only "server closed the connection without a response". When the dropped connection's port now refuses, the client says the server exited and that `exit` in an eval is the usual cause [#71]
@@ -147,3 +148,4 @@ Initial Public Release
 [#71]: https://github.com/MichaelHatherly/REPLicant.jl/issues/71
 [#72]: https://github.com/MichaelHatherly/REPLicant.jl/issues/72
 [#73]: https://github.com/MichaelHatherly/REPLicant.jl/issues/73
+[#74]: https://github.com/MichaelHatherly/REPLicant.jl/issues/74

@@ -423,6 +423,22 @@ end
     end
 end
 
+@testitem "client_refuses_missing_dir" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+    import Logging
+
+    # A `--dir` that does not exist is the caller's mistake: a plain message for the
+    # caller, nothing in the server's log.
+    logger = Test.TestLogger(; min_level = Logging.Debug)
+    Utilities.withserver(; logger) do server, mod, port
+        missing_dir = joinpath(mktempdir(), "gone")
+        err = IOBuffer()
+        @test REPLicant.cli(["--port=$port", "--dir=$missing_dir", "-e", "1"]; out = IOBuffer(), err) == 1
+        @test strip(String(take!(err))) == "no such directory: $missing_dir"
+    end
+    @test !any(record -> record.level >= Logging.Warn, logger.logs)
+end
+
 @testitem "client_module_isolation" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
