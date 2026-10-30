@@ -191,6 +191,32 @@ end
     end
 end
 
+@testitem "saved_server_builds_the_rpc_client_image" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    # A saved server runs `julia +rpc help` once it registers, so the channel's client
+    # image is built before the next client call needs it. Unsaved servers, as test
+    # suites start them, leave it alone. A stand-in `julia` on `PATH` records the call.
+    mktempdir() do bin
+        calls = joinpath(bin, "calls")
+        julia = joinpath(bin, Sys.iswindows() ? "julia.bat" : "julia")
+        write(julia, Sys.iswindows() ? "@echo %* >> \"$calls\"\r\n" : "#!/bin/sh\necho \"\$@\" >> '$calls'\n")
+        chmod(julia, 0o755)
+        withenv("PATH" => bin * (Sys.iswindows() ? ";" : ":") * ENV["PATH"]) do
+            Utilities.without_current_server() do
+                Utilities.withproject() do start, registry
+                    start()
+                    start(; save = true)
+                    @test timedwait(() -> isfile(calls), 10) === :ok
+                    sleep(0.5)
+                    @test strip.(readlines(calls)) == ["+rpc help"]
+                end
+            end
+        end
+    end
+end
+
 @testitem "second_saved_server_replaces_first" setup = [Utilities] tags =
     [:server_lifecycle] begin
     import REPLicant

@@ -234,6 +234,8 @@ function _listen_and_register!(srv::Server)
     srv.project = project
     srv.started = started
     srv.verbose && @info "REPLicant listening" port_number project entry_path
+    # A saved server is the one clients will call, so ready their image now.
+    srv.save && _build_client_image()
 
     Base.@lock SERVERS_LOCK begin
         SERVERS[srv] = (server, entry_path)
