@@ -107,6 +107,9 @@ end
 # task by the input-capturing AST transform before the line evaluates; the line's
 # output then streams into the new entry via the tee.
 function _record_repl_input(code::AbstractString)
+    # The displayed result is teed by `RouterDisplay`, so it must sit above the
+    # REPL's own display.
+    _raise_router_display!()
     Base.@lock ACTIVITY_LOCK begin
         _finalize_open!()
         isempty(strip(code)) && return nothing
@@ -227,7 +230,7 @@ function _format_entry(io::IOBuffer, entry::LogEntry)
 end
 
 # Install the human-input capture once, at server start. Two-layer dispatch like
-# `_revise`/`_notify_busy`: the REPL extension overrides `__install_activity_capture`
+# `_revise`/`__notify_busy`: the REPL extension overrides `__install_activity_capture`
 # to push the AST transform; the fallback no-ops, so a headless server (no REPL) never
 # captures human input. Idempotent and process-wide. On Julia 1.11+ REPL loads after
 # startup.jl has started the server, so the extension's `__init__` reads the request.

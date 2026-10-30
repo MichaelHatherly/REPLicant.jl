@@ -405,16 +405,32 @@ end
 # render it in `ls` to tell a wedged server from an idle one.
 _busy_marker(srv::Server) = isnothing(srv.busy_since) ? "" : string(srv.busy_since)
 
-# The footer's status row reads `busy_since`, so each change to it asks for a repaint.
-# The code is written first, so a reader that sees the time also sees its code.
+# The terminal title and the footer's status row read `busy_since`, so each change
+# to it updates the title and asks for a repaint; an eval that finishes quickly
+# would otherwise never be seen to have started. The code is written first, so a
+# reader that sees the time also sees its code.
 function _set_busy!(
         srv::Server, since::Union{Dates.DateTime, Nothing}, code::AbstractString = srv.busy_code,
     )
     srv.busy_code = code
     srv.busy_since = since
+    # Request the repaint before the title write, which can yield.
     Footers.update!()
+    __notify_busy(nothing)
     return nothing
 end
+
+# True while this process's server, the one the title and footer report, is
+# mid-evaluation. A test server evaluating in the same process leaves it false.
+function _is_busy()
+    srv = CURRENT_SERVER[]
+    return !isnothing(srv) && !isnothing(srv.busy_since)
+end
+
+# Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
+# `__notify_busy(::Nothing)` to set the terminal title; `_set_busy!` calls it on
+# both edges of an evaluation. Without REPL the `::Any` fallback does nothing.
+__notify_busy(::Any) = nothing
 
 # Request an interrupt of the running eval, freeing a wedged worker without killing
 # the process. Returns whether an eval was running to interrupt. Called from the

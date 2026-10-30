@@ -139,6 +139,11 @@
         end
     end
 
+    # Run `func()` as the interactive REPL's own code runs, with no capture bound. A
+    # warm suite run executes inside a remote eval, whose capture would otherwise
+    # be bound throughout.
+    outside_capture(func) = REPLicant.with(func, REPLicant.CAPTURE_TARGET => nothing)
+
     # Run `func()` with the process's server slot empty, so a test can claim it
     # without taking it from the warm session's own saved server.
     function without_current_server(func)

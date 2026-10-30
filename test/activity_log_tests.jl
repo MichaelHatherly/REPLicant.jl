@@ -103,8 +103,10 @@ end
     router = REPLicant.Router(Ref{IO}(backing))
 
     REPLicant._record_repl_input("x = 41")
-    print(router, "hello\n")
-    show(IOContext(router, :color => false), "text/plain", 42)
+    Utilities.outside_capture() do
+        print(router, "hello\n")
+        show(IOContext(router, :color => false), "text/plain", 42)
+    end
 
     body = REPLicant._render_activity_log("")
     @test contains(body, "repl")
@@ -129,10 +131,30 @@ end
     # The REPL renders a bare result through the display stack, not the redirected
     # stdout. RouterDisplay tees it into the open entry, then declines (MethodError)
     # so the REPL's own display still shows it on the terminal.
-    @test_throws MethodError Base.display(REPLicant.RouterDisplay(), MIME"text/plain"(), 42)
+    Utilities.outside_capture() do
+        @test_throws MethodError Base.display(REPLicant.RouterDisplay(), MIME"text/plain"(), 42)
+    end
     body = REPLicant._render_activity_log("")
     @test contains(body, "hyp = 6 * 7")
     @test contains(body, "42")
+end
+
+@testitem "activity_tees_display_under_a_later_display" tags = [:activity] setup = [Utilities] begin
+    import REPLicant
+
+    # The REPL pushes its own display after routing is installed. A human input
+    # puts `RouterDisplay` back on top so the displayed result is teed.
+    struct Grabber <: AbstractDisplay end
+    REPLicant._install_routing!()
+    grabber = Grabber()
+    pushdisplay(grabber)
+    try
+        Utilities.reset_activity()
+        REPLicant._record_repl_input("6 * 7")
+        @test last(Base.Multimedia.displays) isa REPLicant.RouterDisplay
+    finally
+        popdisplay(grabber)
+    end
 end
 
 @testitem "activity_human_output_capped" tags = [:activity] setup = [Utilities] begin
@@ -142,7 +164,9 @@ end
     router = REPLicant.Router(Ref{IO}(IOBuffer()))
 
     REPLicant._record_repl_input("noisy()")
-    print(router, repeat("a", REPLicant.MAX_ENTRY_OUTPUT_BYTES + 500))
+    Utilities.outside_capture() do
+        print(router, repeat("a", REPLicant.MAX_ENTRY_OUTPUT_BYTES + 500))
+    end
     entry = REPLicant.CURRENT_HUMAN_ENTRY[]
     @test entry !== nothing
     @test length(entry.out) == REPLicant.MAX_ENTRY_OUTPUT_BYTES

@@ -39,32 +39,45 @@ end
     end
 end
 
-@testitem "busy_depth_counter" tags = [:utilities] begin
-    # Busy state is a depth counter: nested signals stack, and only the matching
-    # number of decrements clears it. Restored to idle at the end.
-    @test !REPLicant._is_busy()
-    REPLicant._notify_busy(1)
-    @test REPLicant._is_busy()
-    REPLicant._notify_busy(1)
-    @test REPLicant._is_busy()
-    REPLicant._notify_busy(-1)
-    @test REPLicant._is_busy()
-    REPLicant._notify_busy(-1)
-    @test !REPLicant._is_busy()
+@testitem "busy_follows_the_session_server" tags = [:utilities] setup = [Utilities] begin
+    import Dates
+
+    # The title and footer report the session's server. A test server evaluating
+    # must not mark the session busy.
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            session, _ = start(; save = true)
+            other, _ = start()
+            REPLicant._set_busy!(other, Dates.now(), "work()")
+            @test !REPLicant._is_busy()
+            REPLicant._set_busy!(session, Dates.now(), "work()")
+            @test REPLicant._is_busy()
+            REPLicant._set_busy!(session, nothing)
+            REPLicant._set_busy!(other, nothing)
+            @test !REPLicant._is_busy()
+        end
+    end
 end
 
-@testitem "busy_hook_safe_without_repl" tags = [:utilities] begin
+@testitem "busy_hook_safe_without_repl" tags = [:utilities] setup = [Utilities] begin
+    import Dates
     import REPL  # loads the REPL extension, which overrides __notify_busy
+
     # The server starts before any interactive REPL exists, so the hook must be a
-    # safe no-op when `Base.active_repl` is unset while the counter still tracks.
-    @test !REPLicant._is_busy()
-    REPLicant._notify_busy(1)
-    @test REPLicant._is_busy()
-    REPLicant._notify_busy(-1)
-    @test !REPLicant._is_busy()
+    # safe no-op when `Base.active_repl` is unset.
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            session, _ = start(; save = true)
+            REPLicant._set_busy!(session, Dates.now(), "work()")
+            @test REPLicant._is_busy()
+            REPLicant._set_busy!(session, nothing)
+            @test !REPLicant._is_busy()
+        end
+    end
 end
 
-@testitem "busy_title_is_one_write" tags = [:utilities] begin
+@testitem "busy_title_is_one_write" tags = [:utilities] setup = [Utilities] begin
+    import Dates
     import REPL
 
     # Records each write it is handed, as the terminal would receive them.
@@ -77,12 +90,17 @@ end
 
     ext = Base.get_extension(REPLicant, :REPLicantREPLExt)
     log = WriteLog(String[])
-    ext.TERMINAL[] = log
-    try
-        REPLicant._notify_busy(1)
-        REPLicant._notify_busy(-1)
-    finally
-        ext.TERMINAL[] = nothing
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            session, _ = start(; save = true)
+            ext.TERMINAL[] = log
+            try
+                REPLicant._set_busy!(session, Dates.now(), "work()")
+                REPLicant._set_busy!(session, nothing)
+            finally
+                ext.TERMINAL[] = nothing
+            end
+        end
     end
     # The footer repaints from another task. A title split across writes lets a
     # repaint land inside the escape sequence, and the title prints as text.

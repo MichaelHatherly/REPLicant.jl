@@ -112,7 +112,67 @@ end
     # captured alongside ordinary printed output.
     result = REPLicant._evaluate("display([1, 2, 3]); println(\"after\")", 1, mod, "")
     @test contains(result.output, "3-element Vector{Int64}")
-    @test contains(result.output, "after")
+    # Like the REPL's display, the shown value ends its line.
+    @test contains(result.output, " 3\nafter")
+end
+
+@testitem "eval_display_captured_under_a_later_display" tags = [:code_evaluation] begin
+    # The interactive REPL pushes its own display after the server installs
+    # routing; an eval's `display` must still reach the capture, not that display.
+    struct Grabber <: AbstractDisplay
+        io::IOBuffer
+    end
+    Base.display(d::Grabber, M::MIME"text/plain", x) = show(d.io, M, x)
+    Base.display(d::Grabber, x) = display(d, MIME"text/plain"(), x)
+
+    REPLicant._install_routing!()
+    grabber = Grabber(IOBuffer())
+    pushdisplay(grabber)
+    try
+        result = REPLicant._evaluate("display([1, 2, 3])", 1, Module(), "")
+        @test contains(result.output, "3-element Vector{Int64}")
+        @test isempty(take!(grabber.io))
+    finally
+        popdisplay(grabber)
+    end
+end
+
+@testitem "eval_child_given_stdout_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    # Passing `stdout` hands the child the router's stream rather than fd 1; that
+    # stream must be the capture while one is bound.
+    code = "child = run(`echo handed`, devnull, stdout, stderr; wait = false); wait(child);"
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test contains(result.output, "handed")
+end
+
+@testitem "nested_capture_hands_fds_back_to_outer" tags = [:code_evaluation] begin
+    # A test suite run inside a remote eval nests captures. When the inner one ends,
+    # fd 1/2 must point at the outer capture again, not at the terminal.
+    outer = REPLicant._capture() do
+        REPLicant._capture(() -> nothing)
+        run(`echo after-inner`)
+        nothing
+    end
+    @test contains(outer.output, "after-inner")
+end
+
+@testitem "router_redirect_stream_stays_real_during_capture" tags = [:code_evaluation] begin
+    # `redirect_stdout(router)` makes `pipe_writer`'s stream the runtime's own
+    # stdout, and a server closing mid-eval reinstalls routing inside a capture. Were
+    # that the capture's file, runtime prints would go to a closed file for good.
+    REPLicant._install_routing!()
+    REPLicant._capture() do
+        @test Base.pipe_writer(stdout) === REPLicant.REAL_OUT[]
+    end
+end
+
+@testitem "eval_log_record_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    result = REPLicant._evaluate("@info \"from the eval\"; 1 + 1", 1, mod, "")
+    @test !result.errored
+    @test contains(result.output, "Info: from the eval")
+    @test endswith(strip(result.output), "2")
 end
 
 @testitem "eval_subprocess_output_is_captured" tags = [:code_evaluation] begin
@@ -129,6 +189,87 @@ end
     # fd-level capture catches it.
     result = REPLicant._evaluate("ccall(:puts, Cint, (Cstring,), \"viac\")", 1, mod, "")
     @test contains(result.output, "viac")
+end
+
+# Eval code defining `cwrite(fd, bytes)`, a raw C write to `fd`. The Windows CRT
+# exports it as `_write`.
+@testsnippet CWrite begin
+    const CWRITE = """
+    cwrite(fd, buf) = @static if Sys.iswindows()
+        ccall(:_write, Cint, (Cint, Ptr{UInt8}, Cuint), fd, buf, length(buf))
+    else
+        ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), fd, buf, length(buf))
+    end
+    """
+end
+
+@testitem "eval_c_write_past_pipe_buffer_is_captured" tags = [:code_evaluation] setup = [CWrite] begin
+    mod = Module()
+    # A pipe holds 64 KB; a C write larger than that must not be cut short.
+    code = CWRITE * """
+        cwrite(1, fill(UInt8('x'), 200_000))
+        """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test count(==('x'), result.output) == 200_000
+    @test endswith(strip(result.output), "200000")
+end
+
+@testitem "eval_subprocess_output_past_pipe_buffer_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    code = raw"""
+    run(`sh -c 'head -c 300000 /dev/zero | tr "\0" y; echo " rc=$?" >&2'`);
+    """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test count(==('y'), result.output) == 300_000
+    @test contains(result.output, " rc=0")
+end
+
+@testitem "killed_capture_leaves_no_file" tags = [:code_evaluation] begin
+    # `kill --force` on a runaway eval skips every `finally`; the capture's file
+    # must go with the process. `_exit` stands in for the kill.
+    mktempdir() do tmp
+        script = """
+        import REPLicant
+        REPLicant._capture() do
+            print("doomed output")
+            ccall(:_exit, Cvoid, (Cint,), 3)
+        end
+        """
+        env = merge(ENV, Dict("TMPDIR" => tmp, "TMP" => tmp, "TEMP" => tmp))
+        cmd = `$(Base.julia_cmd()) --project=$(pkgdir(REPLicant)) --startup-file=no -e $script`
+        proc = run(setenv(ignorestatus(cmd), env))
+        @test proc.exitcode == 3
+        @test isempty(readdir(tmp))
+    end
+end
+
+@testitem "eval_keeps_fds_blocking" tags = [:code_evaluation] begin
+    mod = Module()
+    # Children inherit fd 1/2 with their flags. Non-blocking, a child's write fails
+    # with EAGAIN whenever the sink is momentarily full, and its output is lost.
+    code = """
+    F_GETFL = 3
+    O_NONBLOCK = Sys.isapple() ? 0x0004 : 0x0800
+    flags(fd) = @ccall fcntl(fd::Cint, F_GETFL::Cint)::Cint
+    (flags(1) & O_NONBLOCK, flags(2) & O_NONBLOCK)
+    """
+    if Sys.iswindows()
+        @test true skip = true
+    else
+        result = REPLicant._evaluate(code, 1, mod, "")
+        @test strip(result.output) == "(0, 0)"
+    end
+end
+
+@testitem "eval_large_c_write_interleaves_with_println" tags = [:code_evaluation] setup = [CWrite] begin
+    mod = Module()
+    code = CWRITE * """
+        println("a")
+        cwrite(1, fill(UInt8('x'), 100_000))
+        println("\\nc");
+        """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test split(strip(result.output), '\n') == ["a", "x"^100_000, "c"]
 end
 
 @testitem "eval_subprocess_interleaves_with_println" tags = [:code_evaluation] begin

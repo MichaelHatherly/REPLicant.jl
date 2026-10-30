@@ -2,25 +2,24 @@
 # Output capture.
 #
 # Output is routed per task rather than redirected process-wide. A remote eval
-# binds `CAPTURE_TARGET` to its own pipe for the eval's dynamic extent; the
-# routing IO and display steer Julia-level writes to that pipe when bound and
+# binds `CAPTURE_TARGET` to its own output file for the eval's dynamic extent; the
+# routing IO and display steer Julia-level writes to that file when bound and
 # to the real streams otherwise. The eval also redirects the raw fds 1/2 to the
-# same pipe, so subprocess and C-library output is captured too. The interactive
+# same file, so subprocess and C-library output is captured too. The interactive
 # REPL's output, running with no binding, reaches the terminal even while an eval
 # is in flight.
 
 # The process's real streams, captured when routing is installed. These TTYs write
 # to the terminal through their own libuv handles, independent of fd 1/2. Idle,
-# their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its pipe and
+# their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its file and
 # restores these afterward. The routers steer Julia-level writes to them when no
 # capture target is bound.
 const REAL_OUT = Ref{IO}()
 const REAL_ERR = Ref{IO}()
 
 # The current eval's capture target, or `nothing` when no eval is active. Bound by
-# `with(CAPTURE_TARGET => pipe.in)` and, on 1.11+, inherited by child tasks the
-# eval spawns. `_capture` binds the pipe's write end, a `LibuvStream` whose `write`
-# locks internally, so concurrent writes from inherited tasks stay safe.
+# `with(CAPTURE_TARGET => sink)` and, on 1.11+, inherited by child tasks the eval
+# spawns.
 const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
 # Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
@@ -39,7 +38,7 @@ Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
-# captured into its own pipe, so it never tees here.
+# captured into its own file, so it never tees here.
 function Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt)
     CAPTURE_TARGET[] === nothing && _tee_human(p, n)
     return unsafe_write(_routed(r), p, n)
@@ -65,7 +64,9 @@ function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
         _tee_human_display(x)
         throw(MethodError(display, (d, M, x)))
     end
-    return show(target, M, x)
+    show(target, M, x)
+    println(target)
+    return nothing
 end
 Base.display(d::RouterDisplay, x) = display(d, MIME"text/plain"(), x)
 
@@ -85,6 +86,17 @@ function _install_routing!()
     return nothing
 end
 
+# The interactive REPL pushes its own display after routing is installed, and that
+# display writes to the real terminal. Put `RouterDisplay` back on top so a capture
+# gets an eval's `display`; with none bound it declines to the displays below.
+function _raise_router_display!()
+    ROUTING_INSTALLED[] || return nothing
+    last(Base.Multimedia.displays) isa RouterDisplay && return nothing
+    popdisplay(RouterDisplay())
+    pushdisplay(RouterDisplay())
+    return nothing
+end
+
 function _uninstall_routing!()
     ROUTING_INSTALLED[] || return nothing
     redirect_stdout(REAL_OUT[])
@@ -94,6 +106,66 @@ function _uninstall_routing!()
     ROUTING_INSTALLED[] = false
     return nothing
 end
+
+# The eval's capture target: its output file, flushed on every write so Julia-level
+# output reaches the fd before any later raw fd 1/2 write and the two stay in order.
+# `IOStream` writes lock internally, so concurrent writes from inherited tasks stay
+# safe.
+struct CaptureSink <: IO
+    file::IOStream
+    CaptureSink(file::IOStream) = new(file)
+end
+function Base.unsafe_write(s::CaptureSink, p::Ptr{UInt8}, n::UInt)
+    written = unsafe_write(s.file, p, n)
+    flush(s.file)
+    return written
+end
+function Base.write(s::CaptureSink, b::UInt8)
+    written = write(s.file, b)
+    flush(s.file)
+    return written
+end
+Base.flush(s::CaptureSink) = flush(s.file)
+# `ConsoleLogger` falls back to `stderr` when its stream reports closed.
+Base.isopen(s::CaptureSink) = isopen(s.file)
+
+# A fresh read-write file for one eval's output that leaves nothing behind when its
+# last descriptor closes, even when `kill --force` ends a runaway eval and skips every
+# `finally`. Unix unlinks it at once. Windows refuses to unlink an open file, so it is
+# opened delete-on-close instead.
+function _capture_file()
+    @static if Sys.iswindows()
+        path = tempname()
+        GENERIC_READ_WRITE = 0x80000000 | 0x40000000
+        FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+        CREATE_NEW = 0x00000001
+        TEMPORARY_DELETE_ON_CLOSE = 0x00000100 | 0x04000000
+        handle = ccall(
+            :CreateFileW, stdcall, Ptr{Cvoid},
+            (Cwstring, UInt32, UInt32, Ptr{Cvoid}, UInt32, UInt32, Ptr{Cvoid}),
+            path, GENERIC_READ_WRITE, FILE_SHARE_ALL, C_NULL, CREATE_NEW,
+            TEMPORARY_DELETE_ON_CLOSE, C_NULL,
+        )
+        handle == Ptr{Cvoid}(typemax(UInt)) && Base.windowserror(:CreateFileW, true)
+        O_BINARY = 0x8000
+        fd = ccall(:_open_osfhandle, Cint, (Ptr{Cvoid}, Cint), handle, O_BINARY)
+        return fdio(path, fd, true)
+    else
+        path, file = mktemp()
+        rm(path)
+        return file
+    end
+end
+
+# A child process handed the router as its output writes where the router does:
+# during an eval the capture's file itself, whose fd it inherits, so its output
+# stays in order with the eval's. Steered here, not in `pipe_writer`, which
+# `redirect_stdout` also reads and must keep returning the real stream.
+function Base.setup_stdio(r::Router, child_readable::Bool)
+    return Base.setup_stdio(child_readable ? r.real[] : _spawn_stream(_routed(r)), child_readable)
+end
+_spawn_stream(s::CaptureSink) = s.file
+_spawn_stream(io) = io
 
 # `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
 # wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
@@ -106,66 +178,75 @@ _fd_stream(io::Base.IOContext) = _fd_stream(io.io)
 # value (or the thrown exception and its backtrace). InterruptException is rethrown
 # so long-running code stays interruptible.
 #
-# A single pipe sinks every strand of the eval's output in write order: the
-# routers and the display steer Julia-level writes there via `CAPTURE_TARGET`, the
-# logger writes its records there, and fd 1/2 are redirected to it so subprocess
-# and C-library output land there too. fd 1 is process-global, so a subprocess
-# launched at the REPL prompt during an eval is captured into that eval; the worker
-# is sequential, so this is rare and accepted.
+# A single temporary file sinks every strand of the eval's output in write order:
+# the routers and the display steer Julia-level writes there via `CAPTURE_TARGET`,
+# the logger writes its records there, and fd 1/2 are redirected to it so
+# subprocess and C-library output land there too. A pipe would hold only 64 KB: its
+# write end must be non-blocking for libuv, a flag fd 1/2 and child processes share
+# through the dup, so a larger raw write failed with EAGAIN and lost the output. A
+# file write neither fails that way nor waits on a reader, and outside Windows the
+# file is unlinked while it is written. fd 1 is process-global,
+# so a subprocess launched at the REPL prompt during an eval is captured into that
+# eval; the worker is sequential, so this is rare and accepted.
 function _capture(f)
     # Capture routes through the installed streams. The server installs them at
     # start; install here too so a direct `_capture` (e.g. a test) still routes.
     _install_routing!()
+    _raise_router_display!()
 
-    pipe = Pipe()
-    Base.link_pipe!(pipe; reader_supports_async = true, writer_supports_async = true)
-    # Redirect only the raw fds, not the global `stdout`/`stderr` bindings: those
-    # stay the routers. `_redirect_io_libc` is the primitive `redirect_stdout`
-    # calls; it dups the fd portably (Windows `SetStdHandle` handled internally).
-    Base._redirect_io_libc(pipe.in, 1)
-    Base._redirect_io_libc(pipe.in, 2)
-    logger = Logging.ConsoleLogger(pipe.in)
+    file = _capture_file()
+    try
+        sink = CaptureSink(file)
+        outer = CAPTURE_TARGET[]
+        # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
+        # those stay the routers. `_redirect_io_libc` is the primitive
+        # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle`
+        # handled internally).
+        Base._redirect_io_libc(file, 1)
+        Base._redirect_io_libc(file, 2)
+        logger = Logging.ConsoleLogger(sink)
 
-    # Spawning the reader task draws from the task RNG; copy and restore it so
-    # user code sees an unperturbed random stream.
-    old_rng = copy(Random.default_rng())
-    buffer = IOBuffer()
-    reader = @async write(buffer, pipe)
-    copy!(Random.default_rng(), old_rng)
-
-    value, errored, backtrace = with(CAPTURE_TARGET => pipe.in) do
-        Logging.with_logger(logger) do
-            try
-                yield()  # let the reader task start draining the pipe
-                f(), false, Vector{Ptr{Cvoid}}()
-            catch err
-                err isa InterruptException && rethrow()
-                # `include_string` wraps an interrupt thrown in user code as a
-                # `LoadError`. Report it to the client like any error, but with no
-                # backtrace: the exception was delivered asynchronously at an
-                # arbitrary point, and walking that stack under threads deadlocks in
-                # the runtime's stack lookup.
-                interrupted = err isa LoadError && err.error isa InterruptException
-                err, true, (interrupted ? Ptr{Cvoid}[] : catch_backtrace())
-            finally
-                # Drain libc's own stdio buffers into the pipe before restoring
-                # the fds, so fully-buffered C output (e.g. `puts`) is captured
-                # rather than flushed to the terminal at process exit.
-                Base.Libc.flush_cstdio()
-                Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
-                Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
-                close(pipe.in)
-                wait(reader)
+        value, errored, backtrace = with(CAPTURE_TARGET => sink) do
+            Logging.with_logger(logger) do
+                try
+                    f(), false, Vector{Ptr{Cvoid}}()
+                catch err
+                    err isa InterruptException && rethrow()
+                    # `include_string` wraps an interrupt thrown in user code as a
+                    # `LoadError`. Report it to the client like any error, but with
+                    # no backtrace: the exception was delivered asynchronously at an
+                    # arbitrary point, and walking that stack under threads
+                    # deadlocks in the runtime's stack lookup.
+                    interrupted = err isa LoadError && err.error isa InterruptException
+                    err, true, (interrupted ? Ptr{Cvoid}[] : catch_backtrace())
+                finally
+                    # Drain libc's own stdio buffers into the file before restoring
+                    # the fds, so fully-buffered C output (e.g. `puts`) is captured
+                    # rather than flushed to the terminal at process exit.
+                    Base.Libc.flush_cstdio()
+                    # A nested capture hands fd 1/2 back to the one around it.
+                    if outer isa CaptureSink
+                        Base._redirect_io_libc(outer.file, 1)
+                        Base._redirect_io_libc(outer.file, 2)
+                    else
+                        Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
+                        Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
+                    end
+                end
             end
         end
-    end
 
-    return (
-        output = String(take!(buffer)),
-        value = value,
-        error = errored,
-        backtrace = backtrace,
-    )
+        flush(file)
+        seekstart(file)
+        return (
+            output = read(file, String),
+            value = value,
+            error = errored,
+            backtrace = backtrace,
+        )
+    finally
+        close(file)
+    end
 end
 
 #
@@ -198,20 +279,20 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
             println(buffer, rstrip(result.output))
         end
 
-        if result.error
+        errored = result.error
+        if errored
             _error_message(buffer, result, id)
-        else
-            _echo_object(result.value) && !_ends_with_semicolon(code) &&
-                _show_object(buffer, result, mod)
+        elseif _echo_object(result.value) && !_ends_with_semicolon(code)
+            errored = !_show_value(buffer, result.value, mod)
         end
 
-        return (; output = String(take!(buffer)), errored = result.error)
+        return (; output = String(take!(buffer)), errored)
     catch error
-        # Guards failures in the result-formatting path (`_error_message`,
-        # `_show_object`, `take!`). Evaluation errors are caught inside `_capture`
-        # and reported through `result.error`.
+        # Guards failures in the result-formatting path (`_error_message`, `take!`).
+        # Evaluation errors are caught inside `_capture` and reported through
+        # `result.error`; a failing `show` is reported by `_show_value`.
         @error "Error evaluating code" id code error
-        return (; output = "ERROR: $(error)", errored = true)
+        return (; output = "ERROR: " * sprint(showerror, error), errored = true)
     end
 end
 
@@ -295,6 +376,26 @@ function _show_object(buffer, result, mod)
     return Base.invokelatest(show, ctx, "text/plain", result.value)
 end
 
+# Show the value into `buffer`, returning whether it showed. A `show` that throws is
+# reported the way the REPL reports it, with its backtrace cut above `_show_object`
+# so only the frames of the failing `show` remain.
+function _show_value(buffer::IOBuffer, value, mod::Module)
+    shown = IOBuffer()
+    try
+        _show_object(shown, (; value), mod)
+    catch err
+        bt = Base.scrub_repl_backtrace(catch_backtrace())
+        cut = findfirst(x -> x.func === :_show_object, bt)
+        isnothing(cut) || (bt = bt[1:(cut - 1)])
+        println(IOContext(buffer, :module => mod), "Error showing value of type ", typeof(value), ":")
+        print(buffer, "ERROR: ")
+        Base.invokelatest(showerror, buffer, err, bt)
+        return false
+    end
+    write(buffer, take!(shown))
+    return true
+end
+
 function _error_message(buffer, result, id)
     # Clean up the backtrace to match REPL behavior. Truncate at the first
     # "top-level scope" frame, since everything below is internal REPLicant
@@ -358,44 +459,17 @@ function __help(::Any, query::AbstractString, mod::Module)
 end
 
 #
-# Busy indicator.
+# Remote requests.
 #
 
-# Depth of in-flight remote evaluations. A counter, not a flag, so overlapping or
-# nested signals compose; the worker is sequential today, so depth is 0 or 1.
-const REMOTE_EVAL_DEPTH = Threads.Atomic{Int}(0)
-
-# True while at least one remote evaluation is running. Read from the footer's
-# upkeep task; the atomic gives a consistent value.
-_is_busy() = REMOTE_EVAL_DEPTH[] > 0
-
-# Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
-# `__notify_busy(::Nothing)` to set the terminal title.
-# Without REPL the `::Any` fallback does nothing.
-function _notify_busy(delta::Int)
-    Threads.atomic_add!(REMOTE_EVAL_DEPTH, delta)
-    __notify_busy(nothing)
-    # Both edges of an evaluation change what the footer's status row says, and an
-    # eval that finishes quickly would otherwise never be seen to have started.
-    Footers.update!()
-    return nothing
-end
-__notify_busy(::Any) = nothing
-
-# Evaluate a remote request while signaling that work is in flight. Pings never
-# reach here, so the indicator reflects only real evaluations.
+# Evaluate a remote request. Record here, the single choke point for agent evals: it
+# covers help queries (which `_evaluate` early-returns) and normal evals, while
+# pings, interrupts, resets, and log requests never reach it, so the log carries no
+# probe noise.
 function _evaluate_request(code::AbstractString, id::Integer, mod::Module, dir::AbstractString)
-    _notify_busy(1)
-    return try
-        result = _evaluate(code, id, mod, dir)
-        # Record here, the single choke point for agent evals: it covers help queries
-        # (which `_evaluate` early-returns) and normal evals, while pings, interrupts,
-        # resets, and log requests never reach it, so the log carries no probe noise.
-        _record_activity(:socket, code, result.output, result.errored)
-        result
-    finally
-        _notify_busy(-1)
-    end
+    result = _evaluate(code, id, mod, dir)
+    _record_activity(:socket, code, result.output, result.errored)
+    return result
 end
 
 #

@@ -217,11 +217,12 @@ end
 
 @testitem "eval_runs_while_busy" tags = [:protocol] setup = [Utilities] begin
     Utilities.withserver() do server, mod, port
-        # Code is evaluated while the busy signal is set, so a remote eval can
-        # observe `_is_busy()` as true. Outside the eval the server is idle.
-        Core.eval(mod, :(import REPLicant))
-        @test Utilities.request(port, "REPLicant._is_busy()") == "true"
-        @test !REPLicant._is_busy()
+        # Code is evaluated while the server's busy marker is set, so a remote eval
+        # observes it. The worker clears it once the eval task, which writes the
+        # reply, has finished, so the client can see the reply first.
+        Core.eval(mod, :(server = $server))
+        @test Utilities.request(port, "server.busy_since !== nothing") == "true"
+        @test timedwait(() -> server.busy_since === nothing, 5.0) === :ok
     end
 end
 
@@ -230,7 +231,7 @@ end
         # A liveness ping never enters the eval path, so it never marks busy.
         frame = Utilities.requestframe(port, REPLicant.REQUEST_PING, "")
         @test frame.type == REPLicant.RESPONSE_PONG
-        @test !REPLicant._is_busy()
+        @test server.busy_since === nothing
     end
 end
 
