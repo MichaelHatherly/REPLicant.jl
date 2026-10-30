@@ -19,6 +19,8 @@
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
+# The longest wait a `Timer` accepts: libuv counts it in UInt64 milliseconds.
+const MAX_TIMEOUT_SECONDS = typemax(UInt64) / 1000
 # Liveness probes are answered off the worker queue, so a live server always
 # replies in milliseconds. A short timeout keeps `ls` and resolution snappy and
 # lets a wedged or version-skewed peer read as dead quickly.

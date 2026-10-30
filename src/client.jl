@@ -218,7 +218,8 @@ function _parse_args(args::Vector{String})
     values, bare, file, script_args = _tokenize_args(args)
     port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
     timeout = haskey(values, "--timeout") ?
-        _parse_number(Float64, values["--timeout"], >(0), "--timeout") : nothing
+        _parse_number(Float64, values["--timeout"], t -> 0 < t < MAX_TIMEOUT_SECONDS, "--timeout") :
+        nothing
     head_lines = haskey(values, "--head-lines") ?
         _parse_number(Int, values["--head-lines"], >=(0), "--head-lines") : nothing
     tail_lines = haskey(values, "--tail-lines") ?
