@@ -28,7 +28,7 @@ const PING_TIMEOUT_SECONDS = 2.0
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16MB
 # An eval's output is bounded only by what it prints. The client trusts its server,
 # so it accepts any body the header can express.
-const MAX_RESPONSE_BYTES = Int(typemax(UInt32))
+const MAX_RESPONSE_BYTES = Int(min(typemax(UInt32), typemax(Int)))
 
 # Appended to magic/version mismatch errors. A peer that fails the header checks
 # is usually a client or server on a different REPLicant version, which the
@@ -77,9 +77,10 @@ function _take_field(bytes, pos::Integer)
     isnothing(newline) && error("malformed eval body: missing field length")
     count = parse(Int, String(bytes[pos:(newline - 1)]))
     start = newline + 1
-    stop = start + count - 1
-    (count < 0 || stop > lastindex(bytes)) &&
+    # Compared against what remains, so a huge `count` cannot overflow `stop`.
+    (count < 0 || count > lastindex(bytes) - start + 1) &&
         error("malformed eval body: field length out of range")
+    stop = start + count - 1
     return String(bytes[start:stop]), stop + 1
 end
 
@@ -90,6 +91,15 @@ struct ReadTimeout <: Exception
 end
 Base.showerror(io::IO, err::ReadTimeout) =
     print(io, "Read timeout: no data received within $(err.timeout_seconds) seconds")
+
+# A frame cut short: the peer closed after sending part of it, as a client
+# interrupted mid-send does.
+struct TruncatedFrame <: Exception
+    expected::Int
+    received::Int
+end
+Base.showerror(io::IO, err::TruncatedFrame) =
+    print(io, "Incomplete frame: expected $(err.expected) bytes, got $(err.received)")
 
 # A peer whose first bytes are not the REPLicant magic: another tool probing the
 # port (an HTTP health check, say), or a client from a pre-framing release.
@@ -128,10 +138,13 @@ end
 
 # Write one frame: the fixed header, then the body bytes.
 function _write_frame(io::IO, type::UInt8, body::String)
+    # Sized before the first byte goes out, so an oversized body fails with no
+    # partial header for the peer to misread.
+    nbytes = UInt32(ncodeunits(body))
     write(io, PROTOCOL_MAGIC)
     write(io, PROTOCOL_VERSION)
     write(io, type)
-    write(io, hton(UInt32(ncodeunits(body))))
+    write(io, hton(nbytes))
     write(io, body)
     flush(io)
     return nothing
@@ -191,9 +204,10 @@ function _discard_body(sock::IO, count::Int; timeout_seconds)
     remaining = count
     while remaining > 0
         n = min(remaining, length(chunk))
-        _read_with_timeout(sock; timeout_seconds) do
+        read = _read_with_timeout(sock; timeout_seconds) do
             readbytes!(sock, chunk, n)
-        end == n || error("Incomplete frame: expected $count body bytes")
+        end::Int
+        read == n || throw(TruncatedFrame(count, count - remaining + read))
         remaining -= n
     end
     return nothing
@@ -226,11 +240,13 @@ function _parse_header(header::Vector{UInt8}, valid_types::Tuple{Vararg{UInt8}},
     type = read(buffer, UInt8)
     any(==(type), valid_types) || error("Unknown message type: $type")
 
-    count = Int(ntoh(read(buffer, UInt32)))
+    # Checked before converting, since a count past `typemax(Int32)` has no `Int` on
+    # a 32-bit platform.
+    count = ntoh(read(buffer, UInt32))
     count > max_bytes &&
         error("Frame too large: $count bytes exceeds maximum of $max_bytes")
 
-    return type, count
+    return type, Int(count)
 end
 
 # Read one frame, validating it against `valid_types`. Returns `(; type, body)`,
@@ -254,7 +270,7 @@ function _read_header(sock::IO, valid_types::Tuple{Vararg{UInt8}}; timeout_secon
     end::Vector{UInt8}
     isempty(header) && return nothing
     length(header) == FRAME_HEADER_BYTES ||
-        error("Incomplete frame header: expected $FRAME_HEADER_BYTES bytes, got $(length(header))")
+        throw(TruncatedFrame(FRAME_HEADER_BYTES, length(header)))
     return _parse_header(header, valid_types, max_bytes)
 end
 
@@ -264,8 +280,7 @@ function _read_body(sock::IO, count::Int; timeout_seconds)
     body = _read_with_timeout(sock; timeout_seconds) do
         read(sock, count)
     end::Vector{UInt8}
-    length(body) == count ||
-        error("Incomplete frame: expected $count body bytes, got $(length(body))")
+    length(body) == count || throw(TruncatedFrame(count, length(body)))
     return body
 end
 
@@ -292,9 +307,9 @@ function _reply_error(sock::IO, id::Integer, error)
         @warn "Rejected a request without this server's token" id
     elseif error isa RequestError
         @debug "Rejected a request" id error
-    elseif error isa ReadTimeout || error isa Base.IOError
+    elseif error isa ReadTimeout || error isa Base.IOError || error isa TruncatedFrame
         # Routine for a stalled peer or one that hung up, such as a client whose
-        # `--timeout` expired. The socket is closed, so there is no one to reply to.
+        # `--timeout` expired or one interrupted mid-send. There is no one to reply to.
         return nothing
     else
         @error "Error handling client" id error

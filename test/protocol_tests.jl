@@ -153,7 +153,41 @@ end
     write(buf, hton(UInt32(10)))
     write(buf, "abc")
     seekstart(buf)
-    @test_throws Exception REPLicant._read_frame(buf, REPLicant.REQUEST_TYPES)
+    @test_throws REPLicant.TruncatedFrame REPLicant._read_frame(buf, REPLicant.REQUEST_TYPES)
+end
+
+@testitem "truncated_frame_logs_quietly" tags = [:protocol] begin
+    import REPLicant
+    import Logging
+    import Sockets
+
+    # A client interrupted mid-send, such as Ctrl-C during a large script, hangs up
+    # with its frame half written. Nobody is left to reply to.
+    port, listener = Sockets.listenany(0)
+    sock = Sockets.connect(Sockets.localhost, port)
+    close(sock)
+    logger = Test.TestLogger(; min_level = Logging.Debug)
+    Logging.with_logger(logger) do
+        REPLicant._reply_error(sock, 1, REPLicant.TruncatedFrame(10, 3))
+    end
+    close(listener)
+    @test !any(record -> record.level >= Logging.Warn, logger.logs)
+end
+
+@testitem "eval_body_field_length_out_of_range" tags = [:protocol, :frame] begin
+    import REPLicant
+
+    # A length past the body, however large, is malformed rather than wrapping
+    # around the range check into a bounds error.
+    for length in ("4", string(typemax(Int)))
+        err = try
+            REPLicant._decode_eval_body("$length\nabc")
+        catch error
+            error
+        end
+        @test err isa ErrorException
+        @test contains(sprint(showerror, err), "malformed eval body")
+    end
 end
 
 @testitem "basic_request" tags = [:protocol] setup = [Utilities] begin
