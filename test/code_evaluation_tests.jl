@@ -136,6 +136,15 @@ end
     end
 end
 
+@testitem "eval_child_given_stdout_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    # Passing `stdout` hands the child the router's stream rather than fd 1; that
+    # stream must be the capture while one is bound.
+    code = "child = run(`echo handed`, devnull, stdout, stderr; wait = false); wait(child);"
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test contains(result.output, "handed")
+end
+
 @testitem "eval_log_record_is_captured" tags = [:code_evaluation] begin
     mod = Module()
     result = REPLicant._evaluate("@info \"from the eval\"; 1 + 1", 1, mod, "")

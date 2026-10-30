@@ -24,7 +24,8 @@ const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
 # Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
 # real stream from `real` (`REAL_OUT` for stdout, `REAL_ERR` for stderr).
-# `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged;
+# `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged,
+# and during an eval the capture's file, so a child handed `stdout` writes there;
 # `write`/`unsafe_write` steer to the bound capture target, else the real stream.
 # Property queries (`:color`, `displaysize`) delegate to the active stream so the
 # router impersonates it: the idle REPL sees the real TTY (color on, real size),
@@ -34,7 +35,7 @@ struct Router <: Base.AbstractPipe
     real::Base.RefValue{IO}
 end
 _routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
-Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
+Base.pipe_writer(r::Router) = _spawn_stream(_routed(r))
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
@@ -126,6 +127,11 @@ end
 Base.flush(s::CaptureSink) = flush(s.file)
 # `ConsoleLogger` falls back to `stderr` when its stream reports closed.
 Base.isopen(s::CaptureSink) = isopen(s.file)
+
+# The stream a child process handed the router writes to: the capture's file
+# itself, whose fd it inherits, so its output stays in order with the eval's.
+_spawn_stream(s::CaptureSink) = s.file
+_spawn_stream(io::IO) = io
 
 # `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
 # wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
