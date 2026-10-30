@@ -101,7 +101,7 @@ end
         err = IOBuffer()
         @test REPLicant.cli(arg; out, err) == 0
         text = String(take!(out))
-        for sub in ("ls", "start", "kill", "interrupt", "reset")
+        for sub in ("ls", "start", "kill", "interrupt", "reset", "restart")
             @test contains(text, sub)
         end
         @test contains(text, "--port")

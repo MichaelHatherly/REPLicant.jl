@@ -38,12 +38,13 @@ byte, then a big-endian `UInt32` body length) followed by the body. Every reques
 body opens with the 64-character token from the server's registry entry, and the
 server rejects a request without it: any local user can reach the port, while
 only the owner can read the owner-only registry. Requests are `eval` (body carries the caller's working directory, the target session module, and
-the code), `ping`, `interrupt`, or `reset` (body is a session module name); responses
-are `ok`/`err` (body is the result or error text) or `pong` (body is the worker's
-busy-since timestamp, empty when idle). An `interrupt` schedules an
-`InterruptException` onto the running eval (a no-op when idle) and a `reset` swaps a
-named session for a fresh module; both are answered off the worker queue, like
-`ping`, so they reach a busy server. Every frame is validated for magic, version,
+the code), `ping`, `interrupt`, `reset` (body is a session module name), `log`, or
+`restart`; responses are `ok`/`err` (body is the result or error text) or `pong`
+(body is the worker's busy-since timestamp, empty when idle). An `interrupt`
+schedules an `InterruptException` onto the running eval (a no-op when idle), a
+`reset` swaps a named session for a fresh module, and a `restart` re-execs the
+process on its launch argv, keeping its pid and terminal (macOS and Linux only). All
+are answered off the worker queue, like `ping`, so they reach a busy server. Every frame is validated for magic, version,
 type, and a 16 MB length cap before its body is trusted.
 
 # Example
@@ -237,10 +238,13 @@ function _listen_and_register!(srv::Server)
     srv.started = started
     srv.verbose && @info "REPLicant listening" port_number project entry_path
 
-    # Ensure cleanup happens even if the Julia process is terminated.
+    # Ensure cleanup happens even if the Julia process is terminated. A restart keeps
+    # the listener open: closing it ends the server task, and a script blocked on
+    # that task would return and exit the process before the re-exec.
     atexit() do
         try
-            _shutdown_server(server, srv, entry_path)
+            RESTARTING[] ? _unregister!(srv, entry_path) :
+                _shutdown_server(server, srv, entry_path)
         catch error
             # Use @debug to avoid noise during forced shutdowns
             @debug "Error during shutdown" error
@@ -292,6 +296,11 @@ end
 function _shutdown_server(listener, srv, entry_path)
     close(listener)
     _uninstall_routing!()
+    return _unregister!(srv, entry_path)
+end
+
+# Drop this process's handle and remove the registry entry.
+function _unregister!(srv, entry_path)
     # Forget this process's server so a later `label!` can't rewrite a removed entry.
     CURRENT_SERVER[] === srv && (CURRENT_SERVER[] = nothing)
     # Always remove the registry entry to keep the registry clean.
@@ -454,6 +463,7 @@ function _dispatch(
         active_connections::Threads.Atomic{Int}, srv::Server,
     )
     enqueued = false
+    restart = false
     try
         frame = _read_request(sock, srv.token, srv.read_timeout_seconds)
         if isnothing(frame)
@@ -476,6 +486,12 @@ function _dispatch(
             # activity while a long eval is still running.
             _write_frame(sock, RESPONSE_OK, _render_activity_log(frame.body))
             srv.verbose && @info "Answered log" id
+        elseif frame.type == REQUEST_RESTART
+            # Answered off the worker queue, so a server wedged on an eval restarts too.
+            # The re-exec waits until the reply is sent and the socket closed below.
+            _check_restartable()
+            _write_frame(sock, RESPONSE_OK, "restarting")
+            restart = true
         else
             decoded = _decode_eval_body(frame.body)
             # Resolve the target module now, while accepting the request, so a later
@@ -496,5 +512,6 @@ function _dispatch(
             srv.verbose && @info "Client disconnected" id
         end
     end
+    restart && _reexec()
     return
 end

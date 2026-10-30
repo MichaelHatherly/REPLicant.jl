@@ -88,11 +88,33 @@ close(REPLicant.server()) # stop it
 Showing the handle reports port, project, name, start time, and limits, read from
 the struct, not the registry.
 
+## Restart a server
+
+`julia +rpc restart` swaps the server's process for a fresh Julia on the same
+command line, then waits until the server registers again:
+
+```bash
+julia +rpc restart              # the server for this directory
+julia +rpc restart --name=main  # same selectors as eval
+```
+
+The pid, terminal, environment, and launch directory carry over. An interactive
+REPL comes back as a new REPL in the same pane, so the human beside you keeps their
+terminal. `startup.jl` runs again and the server comes up on a new port; route by
+`--name` or directory rather than a remembered `--port`. Everything the session
+loaded is gone, so re-run your setup.
+
+Reach for it when Revise cannot track a change (a redefined `struct`, a changed
+`const`), when the process state is suspect, or when an eval has wedged the
+worker. Restart is answered off the worker queue, so it lands even on a server
+stuck in a tight loop. macOS and Linux only; on Windows, `kill` and `start`
+instead.
+
 ## Stop a wedged server
 
-A server holding its worker on a non-returning eval (`while true`, a deadlock, a
-blocking read) keeps `ls` showing it `busy` and never evaluates again. Julia
-cannot interrupt a running task, so the recovery is to kill the process:
+A non-returning eval (`while true`, a deadlock, a blocking read) holds the worker.
+`ls` then shows the server `busy`, and it never evaluates again. Prefer
+`restart` (above), which keeps the process's terminal. Otherwise kill the process:
 
 ```bash
 julia +rpc kill            # SIGTERM the resolved server
