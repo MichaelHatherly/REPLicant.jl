@@ -26,17 +26,28 @@ end
 @testitem "footer_stays_on_the_sessions_server" tags = [:footer] setup = [Utilities] begin
     import REPLicant
 
-    # The footer reports the server it was enabled for. Servers started later in
-    # the process, as tests start them, must not take it over or blank it when they
-    # close. Once its own server stops, it shows whichever server is current.
-    Utilities.withproject() do start, registry
-        session, _ = start()
-        other, _ = start()
-        @test REPLicant._footer_target(session) === session
-        Utilities.wait_closed(other)
-        @test REPLicant._footer_target(session) === session
-        Utilities.wait_closed(session)
-        @test REPLicant._footer_target(session) === REPLicant.CURRENT_SERVER[]
+    # Servers started later in the process, as tests start them, must not take the
+    # row over or blank it when they close.
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            _, port = start(; save = true)
+            other, _ = start()
+            @test occursin(":$port", REPLicant._status_row(120))
+            Utilities.wait_closed(other)
+            @test occursin(":$port", REPLicant._status_row(120))
+        end
+        @test occursin("no server", REPLicant._status_row(120))
+    end
+end
+
+@testitem "footer_reports_an_unsaved_server" tags = [:footer] setup = [Utilities] begin
+    import REPLicant
+
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            _, port = start()
+            @test occursin(":$port", REPLicant._status_row(120))
+        end
     end
 end
 

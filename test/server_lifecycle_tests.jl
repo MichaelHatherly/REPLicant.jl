@@ -77,8 +77,8 @@ end
     import REPLicant
 
     Utilities.withproject() do start, registry
-        _, port = start()
-        @test REPLicant.label!("tests") == "tests"
+        server, port = start()
+        @test REPLicant.label!(server, "tests") == "tests"
         fields = REPLicant._parse_registry_entry(joinpath(registry, string(port)))
         @test fields["name"] == "tests"
     end
@@ -89,13 +89,13 @@ end
     import REPLicant
 
     Utilities.withproject() do start, registry
-        start()                                   # CURRENT_SERVER -> server 1
-        @test REPLicant.label!("tests") == "tests"
-        start()                                   # CURRENT_SERVER -> server 2
+        first, _ = start()
+        @test REPLicant.label!(first, "tests") == "tests"
+        second, _ = start()
         # The label is taken by a live server in the same project.
-        @test_throws Exception REPLicant.label!("tests")
+        @test_throws Exception REPLicant.label!(second, "tests")
         # A distinct label is fine.
-        @test REPLicant.label!("docs") == "docs"
+        @test REPLicant.label!(second, "docs") == "docs"
     end
 end
 
@@ -103,8 +103,68 @@ end
     import REPLicant
 
     Utilities.withproject() do start, registry
-        start()
-        @test_throws Exception REPLicant.label!("a\nb")
+        server, _ = start()
+        @test_throws Exception REPLicant.label!(server, "a\nb")
+    end
+end
+
+@testitem "label_without_handle_labels_session_server" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            _, port = start(; save = true)
+            start()
+            @test REPLicant.label!("tests") == "tests"
+            fields = REPLicant._parse_registry_entry(joinpath(registry, string(port)))
+            @test fields["name"] == "tests"
+        end
+    end
+end
+
+@testitem "test_servers_stay_out_of_the_slot" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    # Unsaved servers, as test suites start them, never displace the session's own.
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            session, _ = start(; save = true)
+            other, _ = start()
+            @test REPLicant.server() === session
+            Utilities.wait_closed(other)
+            @test REPLicant.server() === session
+        end
+    end
+end
+
+@testitem "second_saved_server_replaces_first" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            start(; save = true)
+            replacement, _ = start(; save = true)
+            @test REPLicant.server() === replacement
+        end
+    end
+end
+
+@testitem "label_without_handle_labels_unsaved_server" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    # With no saved server running, the latest server is the one labeled.
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            start()
+            _, port = start()
+            @test REPLicant.label!("tests") == "tests"
+            fields = REPLicant._parse_registry_entry(joinpath(registry, string(port)))
+            @test fields["name"] == "tests"
+        end
     end
 end
 
@@ -115,7 +175,7 @@ end
     Utilities.withserver() do server, mod, port
         @test server.save == false
         # A handle is only handed back via `server()` when saved.
-        @test REPLicant.server() === nothing
+        @test REPLicant.server() !== server
     end
 end
 
@@ -123,18 +183,14 @@ end
     [:server_lifecycle] begin
     import REPLicant
 
-    mktempdir() do tmp
-        registry = mktempdir()
-        withenv("REPLICANT_DIR" => registry) do
-            cd(tmp) do
-                server = REPLicant.Server(; save = true)
-                take!(server.channel)
-                @test REPLicant.server() === server
+    Utilities.without_current_server() do
+        Utilities.withproject() do start, registry
+            server, _ = start(; save = true)
+            @test REPLicant.server() === server
 
-                Utilities.wait_closed(server)
-                # A stopped server is no longer handed back.
-                @test REPLicant.server() === nothing
-            end
+            Utilities.wait_closed(server)
+            # A stopped server is no longer handed back.
+            @test REPLicant.server() === nothing
         end
     end
 end
@@ -196,15 +252,11 @@ end
     end
 end
 
-@testitem "label_requires_running_server" tags = [:server_lifecycle] begin
+@testitem "label_requires_running_server" setup = [Utilities] tags = [:server_lifecycle] begin
     import REPLicant
 
-    old = REPLicant.CURRENT_SERVER[]
-    REPLicant.CURRENT_SERVER[] = nothing
-    try
+    Utilities.without_current_server() do
         @test_throws Exception REPLicant.label!("orphan")
-    finally
-        REPLicant.CURRENT_SERVER[] = old
     end
 end
 

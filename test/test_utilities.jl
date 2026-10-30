@@ -139,6 +139,18 @@
         end
     end
 
+    # Run `func()` with the process's server slot empty, so a test can claim it
+    # without taking it from the warm session's own saved server.
+    function without_current_server(func)
+        held = REPLicant.CURRENT_SERVER[]
+        REPLicant.CURRENT_SERVER[] = nothing
+        try
+            return func()
+        finally
+            REPLicant.CURRENT_SERVER[] = held
+        end
+    end
+
     function _wait_for_entry(registry; timeout = 60)
         deadline = time() + timeout
         while time() < deadline
@@ -158,15 +170,15 @@
     # `start()` launches another server in that same project and returns
     # `(server, port)`. Lets a test stand up several servers in one project to
     # exercise multi-server selection and labeling. Any server still open is
-    # closed on exit.
+    # closed on exit. `start(; save = true)` needs `without_current_server`.
     function withproject(func)
         mktempdir() do tmp
             registry = mktempdir()
             withenv("REPLICANT_DIR" => registry) do
                 cd(tmp) do
                     servers = REPLicant.Server[]
-                    start = function ()
-                        server = REPLicant.Server(Module())
+                    start = function (; save = false)
+                        server = REPLicant.Server(Module(); save)
                         push!(servers, server)
                         return server, take!(server.channel)
                     end

@@ -87,6 +87,9 @@ end
 _render_status(srv::Union{Server, Nothing}, now::Dates.DateTime, width::Integer) =
     _fit_status(_status_fields(srv, now), width)
 
+# The footer's status row for this process's server, as of now.
+_status_row(width::Integer) = _render_status(CURRENT_SERVER[], Dates.now(), width)
+
 # The running code's first line only: the status row has one line to give it, and
 # the ellipsis says there was more.
 function _one_line(code::AbstractString)
@@ -122,12 +125,6 @@ The row is taken out of the terminal's scrolling region rather than printed, so
 the prompt keeps working throughout and ordinary output scrolls underneath. Call it
 from `startup.jl` alongside the server, or at the prompt at any time.
 """
-# The server the footer reports: the one current when it was enabled, so servers
-# started later in the process (a test suite's) never take the row over. Once that
-# server stops, whichever is current.
-_footer_target(session::Union{Server, Nothing}) =
-    isnothing(session) || istaskdone(session.task) ? CURRENT_SERVER[] : session
-
 function footer!(on::Bool = true)
     if !on
         Footers.live!(nothing)
@@ -135,8 +132,7 @@ function footer!(on::Bool = true)
         return false
     end
     Footers.enable!(; io = _terminal_stream()) || return false
-    session = CURRENT_SERVER[]
-    Footers.set!(:status, width -> _render_status(_footer_target(session), Dates.now(), width))
+    Footers.set!(:status, _status_row)
     # The elapsed time in the status row moves on its own, so the footer keeps
     # repainting for as long as an evaluation is in flight.
     Footers.live!(_is_busy)

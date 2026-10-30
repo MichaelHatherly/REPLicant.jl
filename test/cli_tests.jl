@@ -255,8 +255,8 @@ end
         @test contains(listing, string(port))
         @test contains(listing, "PORT")
 
-        # Label this server (CURRENT points at it) and route by name.
-        @test REPLicant.label!("tests") == "tests"
+        # Label this server and route by name.
+        @test REPLicant.label!(server, "tests") == "tests"
         @test REPLicant.cli(["--name=tests", "-e", "2 + 3"]; out) == 0
         @test String(take!(out)) == "5\n"
 
@@ -326,7 +326,7 @@ end
 
     Utilities.withproject() do start, registry
         _, port1 = start()
-        _, port2 = start()
+        second, port2 = start()
 
         # Two unlabeled servers in one project: ambiguous, lists candidates.
         err = IOBuffer()
@@ -341,9 +341,8 @@ end
         @test REPLicant.cli(["--port=$port2", "-e", "20 + 22"]; out) == 0
         @test String(take!(out)) == "42\n"
 
-        # Labeling disambiguates by name. label! tags the most recently started
-        # server (CURRENT), which is port2.
-        @test REPLicant.label!("second") == "second"
+        # Labeling disambiguates by name.
+        @test REPLicant.label!(second, "second") == "second"
         @test REPLicant.cli(["--name=second", "-e", "21 + 21"]; out) == 0
         @test String(take!(out)) == "42\n"
     end
