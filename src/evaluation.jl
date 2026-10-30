@@ -24,8 +24,7 @@ const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
 # Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
 # real stream from `real` (`REAL_OUT` for stdout, `REAL_ERR` for stderr).
-# `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged,
-# and during an eval the capture's file, so a child handed `stdout` writes there;
+# `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged;
 # `write`/`unsafe_write` steer to the bound capture target, else the real stream.
 # Property queries (`:color`, `displaysize`) delegate to the active stream so the
 # router impersonates it: the idle REPL sees the real TTY (color on, real size),
@@ -35,7 +34,7 @@ struct Router <: Base.AbstractPipe
     real::Base.RefValue{IO}
 end
 _routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
-Base.pipe_writer(r::Router) = _spawn_stream(_routed(r))
+Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
@@ -158,8 +157,13 @@ function _capture_file()
     end
 end
 
-# The stream a child process handed the router writes to: the capture's file
-# itself, whose fd it inherits, so its output stays in order with the eval's.
+# A child process handed the router as its output writes where the router does:
+# during an eval the capture's file itself, whose fd it inherits, so its output
+# stays in order with the eval's. Steered here, not in `pipe_writer`, which
+# `redirect_stdout` also reads and must keep returning the real stream.
+function Base.setup_stdio(r::Router, child_readable::Bool)
+    return Base.setup_stdio(child_readable ? r.real[] : _spawn_stream(_routed(r)), child_readable)
+end
 _spawn_stream(s::CaptureSink) = s.file
 _spawn_stream(io::IO) = io
 

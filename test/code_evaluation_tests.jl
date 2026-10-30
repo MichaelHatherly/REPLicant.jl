@@ -157,6 +157,16 @@ end
     @test contains(outer.output, "after-inner")
 end
 
+@testitem "router_redirect_stream_stays_real_during_capture" tags = [:code_evaluation] begin
+    # `redirect_stdout(router)` makes `pipe_writer`'s stream the runtime's own
+    # stdout, and a server closing mid-eval reinstalls routing inside a capture. Were
+    # that the capture's file, runtime prints would go to a closed file for good.
+    REPLicant._install_routing!()
+    REPLicant._capture() do
+        @test Base.pipe_writer(stdout) === REPLicant.REAL_OUT[]
+    end
+end
+
 @testitem "eval_log_record_is_captured" tags = [:code_evaluation] begin
     mod = Module()
     result = REPLicant._evaluate("@info \"from the eval\"; 1 + 1", 1, mod, "")
