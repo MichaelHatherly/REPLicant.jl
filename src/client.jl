@@ -381,9 +381,16 @@ end
 # seconds. A marker that does not parse still reads as busy rather than crashing.
 function _format_status(marker::AbstractString)
     isempty(marker) && return "idle"
-    since = tryparse(Dates.DateTime, marker)
-    isnothing(since) && return "busy"
-    seconds = max(0, round(Int, (Dates.now() - since).value / 1000))
+    # The marker is the server's local `DateTime`. `strptime` stops at its
+    # milliseconds, and `isdst = -1` lets `mktime` place it either side of a DST change.
+    since = try
+        Libc.strptime("%Y-%m-%dT%H:%M:%S", marker)
+    catch  # dendro-ignore: empty_catch -- a marker that does not parse reads as busy
+        return "busy"
+    end
+    since.isdst = -1
+    millis = something(tryparse(Int, last(split(marker, '.'; limit = 2))), 0)
+    seconds = max(0, round(Int, time() - time(since) - millis / 1000))
     return "busy $(seconds)s"
 end
 

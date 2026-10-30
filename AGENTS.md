@@ -50,7 +50,14 @@ Three parts. The code is the reference; this is the map:
   1/2 at its capture file and runs in the caller's cwd. Both belong to the whole
   process, so evals must not overlap, and no lock can make overlapping evals safe.
 - **Client** (`REPLicant.cli`, via `bin/client.jl`): reads the registry, resolves
-  a target, forwards the request. The `rpc` juliaup channel runs it.
+  a target, forwards the request. The `rpc` juliaup channel runs it. It loads a
+  client-only build: `bin/client.jl` appends `bin/client-mode` to `LOAD_PATH`, whose
+  preferences set `mode = "client"`, and `CLIENT_ONLY` leaves out the server files
+  and every package but REPLicant. Julia caches that build apart from the full one.
+  Its workload (`src/precompile_client.jl`) answers the client from a loopback
+  acceptor and marks inferred code for the image without PrecompileTools.
+  Extensions load with it when their trigger is loaded, so each guards its body on
+  `CLIENT_ONLY`.
 - **Registry**: one `key=value` file per live server, so any client finds every
   server in one place.
 - **Footer** (`src/footer.jl`, `src/status.jl`): an opt-in row pinned to the

@@ -222,20 +222,22 @@ function label!(name::AbstractString)
     return label!(srv, name)
 end
 
-function label!(srv::Server, name::AbstractString)
-    occursin('\n', name) && error("REPLicant label must not contain a newline.")
-    # A server has bound its port and published its details by the time a caller
-    # holds a label-worthy handle; assert it to drop the `nothing` branch.
-    port = srv.port::Int
-    project = srv.project::String
-    started = srv.started::Dates.DateTime
-    # An empty name clears the label, and no server holds it.
-    conflict = isempty(name) ? nothing : _label_conflict(project, name, port)
-    isnothing(conflict) || error(
-        "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
-    )
-    _write_registry_entry(port, project; srv.token, name, started)
-    srv.name = name
-    srv.verbose && @info "Labeled REPLicant server" port name
-    return name
+@static if !CLIENT_ONLY
+    function label!(srv::Server, name::AbstractString)
+        occursin('\n', name) && error("REPLicant label must not contain a newline.")
+        # A server has bound its port and published its details by the time a caller
+        # holds a label-worthy handle; assert it to drop the `nothing` branch.
+        port = srv.port::Int
+        project = srv.project::String
+        started = srv.started::Dates.DateTime
+        # An empty name clears the label, and no server holds it.
+        conflict = isempty(name) ? nothing : _label_conflict(project, name, port)
+        isnothing(conflict) || error(
+            "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
+        )
+        _write_registry_entry(port, project; srv.token, name, started)
+        srv.name = name
+        srv.verbose && @info "Labeled REPLicant server" port name
+        return name
+    end
 end
