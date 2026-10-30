@@ -45,6 +45,9 @@ function _workload_session(dir::String)
         catch  # dendro-ignore: empty_catch -- close schedules the InterruptException wait re-raises
         end
     end
+    # The exit hook runs only after the image is written, so call it here. With the
+    # server closed it has nothing to clean up.
+    _exit_cleanup()
     _workload_kill()
     return nothing
 end
@@ -73,8 +76,6 @@ function _workload_requests(port::Int, dir::String)
         [p, "-e", "error(\"boom\")"],
         [p, "-e", "1 +"],
         [p, "-e", "?sin"],
-        [p, "--head-lines=1", "--tail-lines=1", "-e", "for i in 1:3; println(i); end"],
-        [p, "--timeout=30", "-e", "nothing"],
         [p, "--dir=$dir", "-e", "pwd()"],
         ["log", p],
         ["log", "1", p],
@@ -82,7 +83,18 @@ function _workload_requests(port::Int, dir::String)
         ["interrupt", p],
         ["reset", p, "--module=workload"],
         ["--name=workload", "-e", "1"],
+        _workload_option_mixes(p)...,
     ]
+end
+
+# An eval under every mix of `--timeout`, `--head-lines`, and `--tail-lines`. Each
+# mix hands `_send` its own keyword type, which Julia 1.10 compiles separately
+# despite `@nospecialize`.
+function _workload_option_mixes(p::String)
+    timeouts = (String[], ["--timeout=30"])
+    heads = (String[], ["--head-lines=1"])
+    tails = (String[], ["--tail-lines=1"])
+    return [[p; t; h; l; "-e"; "for i in 1:3; println(i); end"] for t in timeouts, h in heads, l in tails]
 end
 
 # Paint the status row into a footer of its own, so the process's footer is never
