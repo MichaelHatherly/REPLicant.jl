@@ -141,14 +141,16 @@ end
 # Resolve a kill or restart target to its registry entry. Unlike eval, this reads the
 # raw registry without pinging, so a wedged server that cannot pong still resolves; an
 # explicit port must name a registered server, since both need its pid.
-function _kill_target(port::Integer, project::AbstractString, name::AbstractString)
+function _kill_target(
+        port::Integer, project::AbstractString, name::AbstractString; err::IO = stderr,
+    )
     entries = _read_entries()
     if port > 0
         index = findfirst(e -> e.port == port, entries)
         isnothing(index) && error("no REPLicant server registered on port $port")
         return entries[index]
     end
-    return _select_entry(entries, project, name)
+    return _select_entry(entries, project, name; err)
 end
 
 # Consume the value following a flag at `index`, erroring when the flag ends the
@@ -427,7 +429,7 @@ end
 # finds it.
 function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
-    entry = _kill_target(parsed.port, parsed.project, parsed.name)
+    entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
     pid = tryparse(Int, entry.pid)
     isnothing(pid) && error("registry entry for port $(entry.port) has no valid pid")
 
@@ -715,7 +717,7 @@ end
 # that and point at `kill --force` rather than claim a success that did not happen.
 function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
-    target = _resolve_port(parsed.port, parsed.project, parsed.name)
+    target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
     frame = _exchange(target, REQUEST_INTERRUPT, "")
     body = frame.body
     if frame.type == RESPONSE_ERR
@@ -749,7 +751,7 @@ const RESTART_SECONDS = 180
 # wedged on an eval. Waits for the new entry, which carries the same pid.
 function _restart_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
-    entry = _kill_target(parsed.port, parsed.project, parsed.name)
+    entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
     frame = _exchange(entry.port, REQUEST_RESTART, "")
     if frame.type == RESPONSE_ERR
         println(err, "replicant: $(frame.body)")
