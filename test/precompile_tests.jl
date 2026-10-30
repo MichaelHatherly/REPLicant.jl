@@ -17,21 +17,15 @@
     # no trace file.
     compiles(trace) = isfile(trace) ? readlines(trace) : String[]
 
-    # Those that REPLicant owns or specializes on, and the socket callbacks libuv calls
-    # on its connections.
-    function owned_compiles(trace)
-        return filter(line -> contains(line, "REPLicant") || contains(line, "Sockets"), compiles(trace))
-    end
+    # Whether a compiled method is one REPLicant owns or specializes on, or a socket
+    # callback libuv calls on its connections.
+    owned(line) = contains(line, "REPLicant") || contains(line, "Sockets")
+    owned_compiles(trace) = filter(owned, compiles(trace))
 
-    # Base methods over Base types that a client compiles before Julia 1.12 whatever the
-    # image holds: a `precompile` directive for them leaves them compiling at runtime.
-    # The condition methods are those `connect` waits on and its callback notifies.
-    BASE_ONLY = VERSION < v"1.12" ? [
-            "precompile(Tuple{typeof(Base.lock), Base.GenericCondition{Base.Threads.SpinLock}})",
-            "precompile(Tuple{typeof(Base.notify), Base.GenericCondition{Base.Threads.SpinLock}})",
-            "precompile(Tuple{typeof(Base.unlock), Base.GenericCondition{Base.Threads.SpinLock}})",
-            "precompile(Tuple{typeof(Base.repeat), Char, Int64})",
-        ] : String[]
+    # The compiles a client is held to. Before Julia 1.12 a package image cannot keep
+    # a Base method over Base types, even with a `precompile` directive, and which of
+    # them a client compiles varies from run to run, so only REPLicant's own count.
+    client_held(lines) = VERSION < v"1.12" ? filter(owned, lines) : lines
 
     # What a client process compiles just to start and load the client build, which no
     # workload of REPLicant's can reach.
@@ -71,7 +65,7 @@
                     trace = joinpath(tmp, "client-$index.txt")
                     command = setenv(`$julia --trace-compile=$trace $client $args`, env; dir = work)
                     finished = finishes(pipeline(ignorestatus(command); stdin = devnull, stdout = devnull, stderr = devnull))
-                    push!(clients, args => finished ? setdiff(compiles(trace), baseline, BASE_ONLY) : ["timed out"])
+                    push!(clients, args => finished ? client_held(setdiff(compiles(trace), baseline)) : ["timed out"])
                 end
                 finishes(proc) || return (; clients, server = ["did not exit"; readlines(log)])
             finally

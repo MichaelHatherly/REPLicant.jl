@@ -20,20 +20,34 @@
     @test String(take!(err)) == ""
 end
 
-@testitem "client_build_compiles_nothing_to_find_the_registry" tags = [:precompile] setup = [Precompiled] begin
+@testsnippet ClientCompiles begin
     import REPLicant
-    client_mode = joinpath(pkgdir(REPLicant), "bin", "client-mode")
-    registry = mktempdir()
-    # What `call` compiles at runtime in the client build, beyond what loading it does.
-    function compiles(call)
-        script = "push!(LOAD_PATH, $(repr(client_mode))); using REPLicant; $call"
-        trace = tempname()
-        command = `$(Precompiled.julia_cmd()) --trace-compile=$trace -e $script`
-        run(addenv(command, "REPLICANT_DIR" => registry))
-        return isfile(trace) ? readlines(trace) : String[]
+    # What `call` compiles at runtime in a process running the client build with
+    # `flags` and `args`, beyond what loading the build and exiting does.
+    function client_compiles(call; flags = ``, args = String[])
+        client_mode = joinpath(pkgdir(REPLicant), "bin", "client-mode")
+        registry = mktempdir()
+        function compiles(code)
+            script = "push!(LOAD_PATH, $(repr(client_mode))); using REPLicant; exit($code)"
+            trace = tempname()
+            command = `$(Precompiled.julia_cmd()) $flags --trace-compile=$trace -e $script $args`
+            run(pipeline(addenv(command, "REPLICANT_DIR" => registry); stdout = tempname()))
+            return Precompiled.compiles(trace)
+        end
+        # The first load may build the client image.
+        compiles("0")
+        return Precompiled.client_held(setdiff(compiles(call), compiles("0")))
     end
-    compiles("nothing")
-    # Every client call looks up the registry, building the default path's name even
+end
+
+@testitem "client_build_compiles_nothing_to_find_the_registry" tags = [:precompile] setup = [Precompiled, ClientCompiles] begin
+    # Every client call reads the registry, building the default path's name even
     # when `REPLICANT_DIR` overrides it.
-    @test setdiff(compiles("REPLicant._registry_dir()"), compiles("nothing")) == String[]
+    @test client_compiles("(REPLicant._read_entries(); 0)") == String[]
+end
+
+@testitem "client_writes_to_forced_color_streams_without_compiling" tags = [:precompile] setup = [Precompiled, ClientCompiles] begin
+    # With color forced, as CI and `--color=yes` do, Julia wraps `stdout` in an
+    # `IOContext`, so the client writes to a stream type its workload never saw.
+    @test client_compiles("REPLicant.cli()"; flags = `--color=yes`, args = ["help"]) == String[]
 end

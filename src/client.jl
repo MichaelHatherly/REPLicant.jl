@@ -4,13 +4,23 @@
 
 # The client's output stream, whatever it is underneath: a pipe under an agent, a
 # file when redirected, a terminal under a human. One concrete type means the code
-# below `cli` compiles once, at precompile time, for all of them.
+# below `cli` compiles once, at precompile time, for all of them. Writes go to the
+# stream under any `IOContext`, which Julia wraps `stdout` in when color is forced,
+# so they reach the stream methods Base already compiled.
 struct Output <: IO
     io::IO
+    stream::IO
 end
-Base.unsafe_write(o::Output, p::Ptr{UInt8}, n::UInt) = unsafe_write(o.io, p, n)
-Base.write(o::Output, b::UInt8) = write(o.io, b)
-Base.flush(o::Output) = flush(o.io)
+function Output(@nospecialize(io::IO))
+    stream = io
+    while stream isa Base.IOContext
+        stream = stream.io
+    end
+    return Output(io, stream)
+end
+Base.unsafe_write(o::Output, p::Ptr{UInt8}, n::UInt) = unsafe_write(o.stream, p, n)
+Base.write(o::Output, b::UInt8) = write(o.stream, b)
+Base.flush(o::Output) = flush(o.stream)
 Base.get(o::Output, key, default) = get(o.io, key, default)
 Base.displaysize(o::Output) = displaysize(o.io)
 

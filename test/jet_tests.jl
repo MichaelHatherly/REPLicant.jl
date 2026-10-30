@@ -82,8 +82,10 @@
         # `convert`. The precompile workload's typeasserts on the results of the
         # top-level calls it dispatches at runtime add builtin throws, and its status
         # row paint reaches `_duration`'s comparison over a `Real`. Passing the value
-        # to `_show_object` directly drops its `getproperty` pair.
-        SOUND_LIMIT = 771   # JET.report_package(REPLicant; mode = :sound)
+        # to `_show_object` directly drops its `getproperty` pair. `Output` unwrapping
+        # an `IOContext` to write to the stream beneath reads its parameter-typed `io`
+        # field as `Any`, so storing it adds one field `convert`.
+        SOUND_LIMIT = 772   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
