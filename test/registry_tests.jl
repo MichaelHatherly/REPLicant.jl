@@ -58,6 +58,29 @@ end
     end
 end
 
+@testitem "registry_pings_servers_concurrently" tags = [:registry] begin
+    import REPLicant
+    import Sockets
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            # Two listeners nobody accepts on, so each ping waits out its timeout.
+            listeners = [Sockets.listenany(0) for _ in 1:2]
+            try
+                for (port, _) in listeners
+                    REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                end
+                elapsed = @elapsed REPLicant._live_entries()
+                @test elapsed < 1.5 * REPLicant.PING_TIMEOUT_SECONDS
+                elapsed = @elapsed REPLicant._list_servers(IOBuffer())
+                @test elapsed < 1.5 * REPLicant.PING_TIMEOUT_SECONDS
+            finally
+                foreach(close ∘ last, listeners)
+            end
+        end
+    end
+end
+
 @testitem "registry_prunes_closed_port" tags = [:registry] begin
     import REPLicant
     import Sockets

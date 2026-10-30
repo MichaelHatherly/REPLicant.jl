@@ -47,11 +47,17 @@ function _read_entries()
 end
 
 # Entries whose servers answer a ping, pruning the registry files of servers that are
-# gone. A busy server that cannot pong is left out but keeps its entry.
+# gone. A busy server that cannot pong is left out but keeps its entry. The pings run
+# concurrently, so selection waits on the slowest server, not the sum of them.
 function _live_entries()
     live = RegistryEntry[]
-    for entry in _read_entries()
-        if _ping(entry.port)
+    entries = _read_entries()
+    answered = fill(false, length(entries))
+    @sync for (index, entry) in enumerate(entries)
+        @async answered[index] = _ping(entry.port)
+    end
+    for (entry, pong) in zip(entries, answered)
+        if pong
             push!(live, entry)
         elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
@@ -396,8 +402,12 @@ end
 
 function _list_servers(out::IO = stdout)
     rows = Tuple{RegistryEntry, String}[]
-    for entry in _read_entries()
-        status = _ping_status(entry.port)
+    entries = _read_entries()
+    statuses = Vector{Union{Nothing, String}}(nothing, length(entries))
+    @sync for (index, entry) in enumerate(entries)
+        @async statuses[index] = _ping_status(entry.port)
+    end
+    for (entry, status) in zip(entries, statuses)
         if !isnothing(status)
             push!(rows, (entry, _format_status(status)))
         elseif _server_gone(entry.port, entry.pid)
