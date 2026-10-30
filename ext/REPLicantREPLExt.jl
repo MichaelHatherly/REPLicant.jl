@@ -169,4 +169,14 @@ function __init__()
     return nothing
 end
 
+# The code `helpmode` builds assigns a global, which precompilation allows only in a
+# module the extension declares, so the workload's help query evaluates here.
+module HelpWorkload end
+
+REPLicant.PrecompileTools.@compile_workload begin
+    REPLicant._evaluate_request("?sin", 1, HelpWorkload, "")
+    REPLicant._run_workload()
+    REPL_TRANSFORM_INSTALLED[] = false
+end
+
 end

@@ -2,6 +2,18 @@
 # Client.
 #
 
+# The client's output stream, whatever it is underneath: a pipe under an agent, a
+# file when redirected, a terminal under a human. One concrete type means the code
+# below `cli` compiles once, at precompile time, for all of them.
+struct Output <: IO
+    io::IO
+end
+Base.unsafe_write(o::Output, p::Ptr{UInt8}, n::UInt) = unsafe_write(o.io, p, n)
+Base.write(o::Output, b::UInt8) = write(o.io, b)
+Base.flush(o::Output) = flush(o.io)
+Base.get(o::Output, key, default) = get(o.io, key, default)
+Base.displaysize(o::Output) = displaysize(o.io)
+
 # A registry entry as the selection cascade needs it. Parsed from the key=value
 # files servers write, named by port in the registry directory.
 struct RegistryEntry
@@ -324,9 +336,10 @@ end
 # of a run and the tail that carries the value or error.
 function _send(
         port::Integer, code::String;
-        out::IO = stdout, err::IO = stderr, timeout_seconds = nothing,
+        out::IO = stdout, err::IO = stderr, @nospecialize(timeout_seconds = nothing),
         cwd::AbstractString = "", mod::AbstractString = "",
-        head_lines::Union{Nothing, Int} = nothing, tail_lines::Union{Nothing, Int} = nothing,
+        @nospecialize(head_lines::Union{Nothing, Int} = nothing),
+        @nospecialize(tail_lines::Union{Nothing, Int} = nothing),
     )
     sock = _open_request(port, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
     try
@@ -860,7 +873,8 @@ function _run_subcommand(args::Vector{String}, out::IO, err::IO)
     return nothing
 end
 
-function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
+function cli(args::Vector{String} = ARGS; @nospecialize(out::IO = stdout), @nospecialize(err::IO = stderr))
+    out, err = Output(out), Output(err)
     try
         handled = _run_subcommand(args, out, err)
         isnothing(handled) || return handled

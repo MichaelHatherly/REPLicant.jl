@@ -14,8 +14,8 @@
 # their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its file and
 # restores these afterward. The routers steer Julia-level writes to them when no
 # capture target is bound.
-const REAL_OUT = Ref{IO}()
-const REAL_ERR = Ref{IO}()
+const REAL_OUT = Ref{IO}(devnull)
+const REAL_ERR = Ref{IO}(devnull)
 
 # The current eval's capture target, or `nothing` when no eval is active. Bound by
 # `with(CAPTURE_TARGET => sink)` and, on 1.11+, inherited by child tasks the eval
@@ -195,13 +195,14 @@ _spawn_stream(io) = io
 # wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
 # to the stream underneath. The routers still write to the full `IOContext`, so
 # `:color` and the rest carry through; only the fd redirect needs the bare stream.
-_fd_stream(io::IO) = io
-_fd_stream(io::Base.IOContext) = _fd_stream(io.io)
+_fd_stream(@nospecialize(io::IO)) = io
+_fd_stream(@nospecialize(io::Base.IOContext)) = _fd_stream(io.io)
 
 # Dup `out` onto fd 1 and `err` onto fd 2. `_redirect_io_libc` is the primitive
 # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle` handled
-# internally).
-function _point_fds(out::IO, err::IO = out)
+# internally). Unspecialized, since the real streams are a terminal, a pipe, or a
+# file depending on how the server was started.
+function _point_fds(@nospecialize(out::IO), @nospecialize(err::IO = out))
     Base._redirect_io_libc(out, 1)
     Base._redirect_io_libc(err, 2)
     return nothing
@@ -413,23 +414,24 @@ function _ends_with_semicolon(code::AbstractString)
     return !isnothing(last) && JuliaSyntax.kind(tokens[last]) == JuliaSyntax.K";"
 end
 
-function _show_object(buffer, result, mod)
+function _show_object(buffer, @nospecialize(value), mod)
     # Mimic REPL display settings: limit output size, no color codes
     # (since we're sending over a socket), and use the correct module
     # context for printing types.
     ctx = IOContext(buffer, :limit => true, :color => false, :module => mod)
     # invokelatest: the value's type may have been defined during this same
     # request, after the worker's world age was fixed.
-    return Base.invokelatest(show, ctx, "text/plain", result.value)
+    return Base.invokelatest(show, ctx, "text/plain", value)
 end
 
 # Show the value into `buffer`, returning whether it showed. A `show` that throws is
 # reported the way the REPL reports it, with its backtrace cut above `_show_object`
-# so only the frames of the failing `show` remain.
-function _show_value(buffer::IOBuffer, value, mod::Module)
+# so only the frames of the failing `show` remain. Unspecialized, since every result
+# type would otherwise compile its own copy.
+function _show_value(buffer::IOBuffer, @nospecialize(value), mod::Module)
     shown = IOBuffer()
     try
-        _show_object(shown, (; value), mod)
+        _show_object(shown, value, mod)
     catch err
         bt = Base.scrub_repl_backtrace(catch_backtrace())
         cut = findfirst(x -> x.func === :_show_object, bt)

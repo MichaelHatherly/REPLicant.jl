@@ -746,12 +746,12 @@ __install_keys(::Any) = false
 # being edited.
 __input_at_end(::Any) = true
 # The REPL extension can load after the footer's tasks started, in a newer world.
-at_input_end() = Base.invokelatest(__input_at_end, nothing)::Bool
+at_input_end() = Base.invokelatest(__input_at_end, nothing)::Bool  # dendro-ignore: near_duplicate -- one-line forwarder to a REPL extension hook
 
 # Draw the prompt and its input again at the cursor. The REPL extension does it;
 # without a line editor there is no prompt to lose.
 __redraw_prompt(::Any) = nothing
-redraw_prompt() = (Base.invokelatest(__redraw_prompt, nothing); nothing)
+redraw_prompt() = (Base.invokelatest(__redraw_prompt, nothing); nothing)  # dendro-ignore: near_duplicate -- one-line forwarder to a REPL extension hook
 
 """
     terminal_output(io)
@@ -777,7 +777,7 @@ Reserve the bottom of the terminal for the footer and start painting it. Returns
 whether it did: with output piped or redirected to a file there is no terminal
 to draw on, and the escape sequences would be corruption rather than a footer.
 """
-function enable!(footer::Footer = FOOTER; io::IO = stdout)
+function enable!(footer::Footer = FOOTER; @nospecialize(io::IO = stdout))
     terminal_output(io) || return false
     start = Base.@lock footer.lock begin
         footer.io = io
