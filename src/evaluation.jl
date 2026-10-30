@@ -167,6 +167,7 @@ function _capture(f)
         # tmpfs. Windows refuses to unlink an open file; the `finally` removes it.
         Sys.iswindows() || rm(path)
         sink = CaptureSink(file)
+        outer = CAPTURE_TARGET[]
         # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
         # those stay the routers. `_redirect_io_libc` is the primitive
         # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle`
@@ -193,8 +194,14 @@ function _capture(f)
                     # the fds, so fully-buffered C output (e.g. `puts`) is captured
                     # rather than flushed to the terminal at process exit.
                     Base.Libc.flush_cstdio()
-                    Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
-                    Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
+                    # A nested capture hands fd 1/2 back to the one around it.
+                    if outer isa CaptureSink
+                        Base._redirect_io_libc(outer.file, 1)
+                        Base._redirect_io_libc(outer.file, 2)
+                    else
+                        Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
+                        Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
+                    end
                 end
             end
         end

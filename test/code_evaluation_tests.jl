@@ -145,6 +145,17 @@ end
     @test contains(result.output, "handed")
 end
 
+@testitem "nested_capture_hands_fds_back_to_outer" tags = [:code_evaluation] begin
+    # A test suite run inside a remote eval nests captures. When the inner one ends,
+    # fd 1/2 must point at the outer capture again, not at the terminal.
+    outer = REPLicant._capture() do
+        REPLicant._capture(() -> nothing)
+        run(`echo after-inner`)
+        nothing
+    end
+    @test contains(outer.output, "after-inner")
+end
+
 @testitem "eval_log_record_is_captured" tags = [:code_evaluation] begin
     mod = Module()
     result = REPLicant._evaluate("@info \"from the eval\"; 1 + 1", 1, mod, "")
