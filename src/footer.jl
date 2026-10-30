@@ -130,8 +130,12 @@ end
 # without losing the prompt.
 const DEFAULT_SHOW_ROWS = 8
 
-default_rows(::Union{AbstractString, Function}, height::Integer) = max(height - 1, 0)
-default_rows(::Any, height::Integer) = min(DEFAULT_SHOW_ROWS, max(height - 1, 0))
+# The most rows the footer may claim. The scrolling region keeps the prompt's row
+# and one more, since DECSTBM ignores a region whose top is its bottom.
+max_rows(height::Integer) = max(height - 2, 0)
+
+default_rows(::Union{AbstractString, Function}, height::Integer) = max_rows(height)
+default_rows(::Any, height::Integer) = min(DEFAULT_SHOW_ROWS, max_rows(height))
 
 """
     render(value, rows, width)
@@ -214,8 +218,7 @@ function paint(
         force_region::Bool = false,
         clear_rows = 1:0,
     )
-    # The footer never claims the row the prompt sits on.
-    n = min(length(lines), max(height - 1, 0))
+    n = min(length(lines), max_rows(height))
     n == 0 && prev == 0 && !force_region && isempty(clear_rows) && return ""
 
     io = IOBuffer()
@@ -480,7 +483,7 @@ function repaint!(footer::Footer; paused::Bool = prompt_evaluating())
     # this repaint's check and its write.
     Base.@lock footer.lock begin
         footer.enabled || return nothing
-        n = min(length(lines), max(height - 1, 0))
+        n = min(length(lines), max_rows(height))
         # A resize resets DECSTBM, so the region has to be claimed again.
         resized = (height, width) != (footer.painted.height, footer.painted.width)
         painted = paint(

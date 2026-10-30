@@ -162,9 +162,10 @@ end
 
     @test F.paint(0, String[], 24, 80) == ""
 
-    # The footer never takes the last row available to the prompt.
+    # The footer leaves the scrolling region two rows, the fewest DECSTBM accepts.
     @test F.paint(0, ["a", "b", "c"], 3, 80) ==
-        "\e7" * "\e[2S" * "\e[1;1r" * "\e[2;1Ha\e[0m\e[K" * "\e[3;1Hb\e[0m\e[K" * "\e8" * "\e[2A"
+        "\e7" * "\e[1S" * "\e[1;2r" * "\e[3;1Ha\e[0m\e[K" * "\e8" * "\e[1A"
+    @test F.default_rows("text", 3) == 1
 
     # After a resize or anything else that clobbers DECSTBM, the region must be set
     # even though the footer has not changed size.
