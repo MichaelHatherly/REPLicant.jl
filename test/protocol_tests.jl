@@ -218,10 +218,11 @@ end
 @testitem "eval_runs_while_busy" tags = [:protocol] setup = [Utilities] begin
     Utilities.withserver() do server, mod, port
         # Code is evaluated while the server's busy marker is set, so a remote eval
-        # observes it. Outside the eval the server is idle again.
+        # observes it. The worker clears it once the eval task, which writes the
+        # reply, has finished, so the client can see the reply first.
         Core.eval(mod, :(server = $server))
         @test Utilities.request(port, "server.busy_since !== nothing") == "true"
-        @test server.busy_since === nothing
+        @test timedwait(() -> server.busy_since === nothing, 5.0) === :ok
     end
 end
 
