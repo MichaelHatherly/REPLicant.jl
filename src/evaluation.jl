@@ -65,7 +65,9 @@ function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
         _tee_human_display(x)
         throw(MethodError(display, (d, M, x)))
     end
-    return show(target, M, x)
+    show(target, M, x)
+    println(target)
+    return nothing
 end
 Base.display(d::RouterDisplay, x) = display(d, MIME"text/plain"(), x)
 

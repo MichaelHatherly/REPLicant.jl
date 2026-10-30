@@ -112,7 +112,8 @@ end
     # captured alongside ordinary printed output.
     result = REPLicant._evaluate("display([1, 2, 3]); println(\"after\")", 1, mod, "")
     @test contains(result.output, "3-element Vector{Int64}")
-    @test contains(result.output, "after")
+    # Like the REPL's display, the shown value ends its line.
+    @test contains(result.output, " 3\nafter")
 end
 
 @testitem "eval_display_captured_under_a_later_display" tags = [:code_evaluation] begin
