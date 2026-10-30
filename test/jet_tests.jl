@@ -72,8 +72,10 @@
         # the same categories: `CaptureSink`'s outer field, the single exit hook over
         # `SERVERS`, the footer's `visible`/`max_rows`/`prompt_evaluating` over
         # `Any` widths and the REPL backend, and keyword `getfield`s on `_cap`,
-        # `_kill_target`, and `repaint!`.
-        SOUND_LIMIT = 746   # JET.report_package(REPLicant; mode = :sound)
+        # `_kill_target`, and `repaint!`. Holding the activity log in `ActivityLog` and
+        # the footer's live predicate and disturbed flag in `Footer` adds their
+        # constructors' field `convert`s.
+        SOUND_LIMIT = 752   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
