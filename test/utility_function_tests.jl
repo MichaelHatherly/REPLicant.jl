@@ -76,8 +76,7 @@ end
     end
 end
 
-@testitem "busy_title_is_one_write" tags = [:utilities] setup = [Utilities] begin
-    import Dates
+@testitem "busy_title_is_one_write" tags = [:utilities] begin
     import REPL
 
     # Records each write it is handed, as the terminal would receive them.
@@ -90,18 +89,8 @@ end
 
     ext = Base.get_extension(REPLicant, :REPLicantREPLExt)
     log = WriteLog(String[])
-    Utilities.without_current_server() do
-        Utilities.withproject() do start, registry
-            session, _ = start(; save = true)
-            ext.TERMINAL[] = log
-            try
-                REPLicant._set_busy!(session, Dates.now(), "work()")
-                REPLicant._set_busy!(session, nothing)
-            finally
-                ext.TERMINAL[] = nothing
-            end
-        end
-    end
+    ext._write_title(log, true)
+    ext._write_title(log, false)
     # The footer repaints from another task. A title split across writes lets a
     # repaint land inside the escape sequence, and the title prints as text.
     @test log.writes == ["\e]2;● julia — remote eval\a", "\e]2;julia\a"]

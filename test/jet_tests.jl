@@ -70,10 +70,15 @@
         # adds keyword `getfield`s to `_read_header`, `_read_body`, and the chunked
         # `_discard_body`, plus `TruncatedFrame`'s field `convert`s. The rest are in
         # the same categories: `CaptureSink`'s outer field, the single exit hook over
-        # `RUNNING_SERVERS`, the footer's `visible`/`max_rows`/`prompt_evaluating` over
+        # `SERVERS`, the footer's `visible`/`max_rows`/`prompt_evaluating` over
         # `Any` widths and the REPL backend, and keyword `getfield`s on `_cap`,
-        # `_kill_target`, and `repaint!`.
-        SOUND_LIMIT = 746   # JET.report_package(REPLicant; mode = :sound)
+        # `_kill_target`, and `repaint!`. Holding the activity log in `ActivityLog` and
+        # the footer's live predicate and disturbed flag in `Footer` adds their
+        # constructors' field `convert`s. Repairing the footer and prompt after a
+        # resize adds the `widened` field's `convert`, the `invokelatest` results of
+        # the REPL extension's input check and prompt redraw, and the `Function`-typed
+        # `on_height_loss` call in `repaint!`.
+        SOUND_LIMIT = 762   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

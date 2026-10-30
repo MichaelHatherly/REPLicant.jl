@@ -203,12 +203,14 @@ function footer_lines(sections, height::Integer, width::Integer)
 end
 
 """
-    paint(prev, lines, height, width; force_region = false, clear_rows = 1:0)
+    paint(prev, lines, height, width; force_region = false, clear_rows = 1:0, clear_below = false)
 
 Byte string that redraws a footer of `lines` over one that occupied `prev` rows.
 Pass `force_region` when the terminal's scrolling region can no longer be
 trusted, so that it is set even if the footer has not changed size, and
 `clear_rows` for rows holding footer text the footer no longer owns.
+`clear_below` erases everything from the cursor down first, for footer text at
+rows nothing recorded.
 """
 function paint(
         prev::Integer,
@@ -217,12 +219,14 @@ function paint(
         width::Integer;
         force_region::Bool = false,
         clear_rows = 1:0,
+        clear_below::Bool = false,
     )
     n = min(length(lines), max_rows(height))
-    n == 0 && prev == 0 && !force_region && isempty(clear_rows) && return ""
+    n == 0 && prev == 0 && !force_region && isempty(clear_rows) && !clear_below && return ""
 
     io = IOBuffer()
     write(io, "\e7")
+    clear_below && write(io, "\e[J")
     if n > prev
         # Growing the footer shrinks the scrolling region from the bottom, which
         # would overwrite whatever sits in the rows being claimed. Scroll the old
@@ -355,8 +359,20 @@ mutable struct Footer
     started::Bool
     wake::Base.Event
     lock::ReentrantLock
+    # Content that changes on its own clock, rather than only when something calls
+    # `set!`: an elapsed time counting up, a progress figure read from elsewhere. The
+    # predicate is consulted on every upkeep tick and a repaint follows while it
+    # holds, which is how a section can tick without this module knowing what it is
+    # showing.
+    live::Union{Nothing, Base.Callable}
+    # Set by `disturbed!`, cleared by the upkeep tick that repaints.
+    disturbed::Bool
+    # Set when the terminal widens under a painted footer, cleared by the repaint
+    # that erases below the cursor.
+    widened::Bool
 end
 
+# `disturbed` starts set so the first tick paints, whatever brought the footer up.
 Footer(io::IO) = Footer(
     io,
     Pair{Any, Section}[],
@@ -366,15 +382,12 @@ Footer(io::IO) = Footer(
     false,
     Base.Event(true),
     ReentrantLock(),
+    nothing,
+    true,
+    false,
 )
 
 const FOOTER = Footer(stdout)
-
-# Content that changes on its own clock, rather than only when something calls
-# `set!`: an elapsed time counting up, a progress figure read from elsewhere. The
-# predicate is consulted on every upkeep tick and a repaint follows while it holds,
-# which is how a section can tick without this module knowing what it is showing.
-const LIVE = Ref{Union{Nothing, Base.Callable}}(nothing)
 
 """
     live!(predicate)
@@ -382,8 +395,8 @@ const LIVE = Ref{Union{Nothing, Base.Callable}}(nothing)
 Repaint on every upkeep tick for as long as `predicate` returns true. Pass
 `nothing` to stop.
 """
-function live!(predicate::Union{Nothing, Base.Callable})
-    LIVE[] = predicate
+function live!(predicate::Union{Nothing, Base.Callable}, footer::Footer = FOOTER)
+    footer.live = predicate
     return nothing
 end
 
@@ -465,7 +478,22 @@ end
 
 # Write the footer update as a single `write`, so it cannot land inside one of
 # the line editor's redraws.
-function repaint!(footer::Footer; paused::Bool = prompt_evaluating())
+#
+# A terminal that rejoins wrapped lines when it widens keeps the top fixed, so the
+# old footer rises by however many rows the rejoining saved, into the blank rows
+# between the prompt and the new footer. Nothing records how far, so the repaint
+# erases from the cursor down. That is safe only with the cursor at the end of the
+# input; mid-edit it would take the human's text, so the erase waits.
+#
+# A terminal losing height keeps the bottom fixed. Without a footer it trims the
+# blank rows below the prompt first; the footer's row stops that, so the prompt
+# scrolls off the top and only the line editor can draw it again.
+function repaint!(
+        footer::Footer;
+        paused::Bool = prompt_evaluating(),
+        input_at_end::Bool = at_input_end(),
+        on_height_loss::Base.Callable = redraw_prompt,
+    )
     sections = Base.@lock footer.lock begin
         # A disabled footer owns no rows. `disable!` hands them back itself.
         footer.enabled || return nothing
@@ -481,11 +509,15 @@ function repaint!(footer::Footer; paused::Bool = prompt_evaluating())
 
     # Written under the lock, so a `disable!` cannot hand the region back between
     # this repaint's check and its write.
-    Base.@lock footer.lock begin
+    lost_height = Base.@lock footer.lock begin
         footer.enabled || return nothing
+        lost_height = footer.painted.rows > 0 && height < footer.painted.height
         n = min(length(lines), max_rows(height))
         # A resize resets DECSTBM, so the region has to be claimed again.
         resized = (height, width) != (footer.painted.height, footer.painted.width)
+        widened = footer.widened || (footer.painted.rows > 0 && width > footer.painted.width)
+        clear_below = widened && input_at_end
+        footer.widened = widened && !clear_below
         painted = paint(
             footer.painted.rows,
             lines,
@@ -493,11 +525,15 @@ function repaint!(footer::Footer; paused::Bool = prompt_evaluating())
             width;
             force_region = resized || footer.stale,
             clear_rows = abandoned_rows(footer.painted, n, height, width),
+            clear_below,
         )
         footer.painted = Painted(n, height, width, [min(display_width(line), width) for line in lines[1:n]])
         footer.stale = false
         isempty(painted) || write(footer.io, painted)
+        lost_height
     end
+    # The line editor writes its own redraw, so it runs without the footer's lock.
+    lost_height && on_height_loss()
     return nothing
 end
 
@@ -603,8 +639,6 @@ end
 const UPKEEP_TICK = 0.5
 const IDLE_REPAINT = 30.0
 const EVAL_HOOKED = Ref(false)
-# Starts set so the first tick paints, whatever brought the footer up.
-const EVALUATED = Ref(true)
 
 """
     disturbed!()
@@ -613,8 +647,8 @@ Note that something which could have damaged the footer has happened, so that th
 next upkeep tick repaints. Cheaper than [`refresh!`](@ref) for an event that
 arrives often and does not need the screen right now.
 """
-function disturbed!()
-    EVALUATED[] = true
+function disturbed!(footer::Footer = FOOTER)
+    footer.disturbed = true
     return nothing
 end
 
@@ -641,14 +675,14 @@ end
 awaiting_input(channel::Channel) = !isempty(channel.cond_take.waitq)
 awaiting_input(::Any) = false
 
-function install_eval_hook!()
+function install_eval_hook!(footer::Footer)
     EVAL_HOOKED[] && return true
     backend = repl_backend()
     backend === nothing && return false
     hasproperty(backend, :ast_transforms) || return false
     # Applied with `invokelatest`, so a closure pushed from here is safe to call
     # from the backend task that was already running when it was made.
-    push!(backend.ast_transforms, ast -> (disturbed!(); ast))
+    push!(backend.ast_transforms, ast -> (disturbed!(footer); ast))
     EVAL_HOOKED[] = true
     return true
 end
@@ -657,19 +691,22 @@ function upkeep(footer::Footer)
     healed = time()
     while true
         sleep(UPKEEP_TICK)
-        install_eval_hook!()
+        install_eval_hook!(footer)
         # The REPL extension can load after this task started, in a newer world.
         Base.invokelatest(__install_keys, nothing)
         # The hook fires before the prompt's eval runs; repair once it has returned.
         (footer.enabled && !prompt_evaluating()) || continue
-        evaluated = EVALUATED[]
-        evaluated && (EVALUATED[] = false)
-        live = LIVE[]
-        if evaluated || time() - healed >= IDLE_REPAINT
+        disturbed = footer.disturbed
+        disturbed && (footer.disturbed = false)
+        live = footer.live
+        if disturbed || time() - healed >= IDLE_REPAINT
             Base.@lock footer.lock footer.stale = true
             notify(footer.wake)
             healed = time()
         elseif live !== nothing && Base.invokelatest(live)
+            notify(footer.wake)
+        elseif footer.widened && at_input_end()
+            # The erase a widen left waiting for the cursor to reach the end of the input.
             notify(footer.wake)
         end
     end
@@ -703,6 +740,18 @@ function clear_screen_sequence(footer::Footer = FOOTER)
 end
 
 __install_keys(::Any) = false
+
+# Whether the line editor's cursor sits at the end of its input, so nothing below
+# it is the human's. The REPL extension answers; without a line editor nothing is
+# being edited.
+__input_at_end(::Any) = true
+# The REPL extension can load after the footer's tasks started, in a newer world.
+at_input_end() = Base.invokelatest(__input_at_end, nothing)::Bool
+
+# Draw the prompt and its input again at the cursor. The REPL extension does it;
+# without a line editor there is no prompt to lose.
+__redraw_prompt(::Any) = nothing
+redraw_prompt() = (Base.invokelatest(__redraw_prompt, nothing); nothing)
 
 """
     terminal_output(io)
@@ -768,6 +817,7 @@ function disable!(footer::Footer = FOOTER)
         seq = paint(footer.painted.rows, String[], height, width; force_region = true)
         footer.painted = Painted()
         footer.stale = false
+        footer.widened = false
         # Written here rather than left to the dispatch task, which idles from the
         # moment the footer is disabled and would never pick this up.
         isempty(seq) || write(footer.io, seq)

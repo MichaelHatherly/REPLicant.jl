@@ -22,23 +22,18 @@ end
 # Busy indicator: set the terminal title while a remote evaluation is in flight.
 #
 
-const TERMINAL = Ref{Any}(nothing)
-
-# The server starts from startup.jl before the interactive REPL exists, so resolve
-# the terminal lazily on first signal.
-function _terminal()
-    TERMINAL[] === nothing || return TERMINAL[]
+# The server starts from startup.jl before the interactive REPL exists, so look the
+# terminal up on each signal.
+function REPLicant.__notify_busy(::Nothing)
     (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return nothing
-    return TERMINAL[] = Base.active_repl.t
+    return _write_title(Base.active_repl.t, REPLicant._is_busy())
 end
 
-function REPLicant.__notify_busy(::Nothing)
-    terminal = _terminal()
-    terminal === nothing && return nothing
-    # OSC 2 sets the title on the real terminal, bypassing the stdout redirection
-    # that eval installs. One write, so a footer repaint from another task cannot
-    # land inside the sequence and leave the title printed as text.
-    title = REPLicant._is_busy() ? "● julia — remote eval" : "julia"
+# OSC 2 sets the title on the real terminal, bypassing the stdout redirection that
+# eval installs. One write, so a footer repaint from another task cannot land inside
+# the sequence and leave the title printed as text.
+function _write_title(terminal::IO, busy::Bool)
+    title = busy ? "● julia — remote eval" : "julia"
     write(terminal, "\e]2;$title\a")
     return nothing
 end
@@ -84,6 +79,26 @@ function REPLicant.Footers.__install_keys(::Nothing)
     end
     FOOTER_KEYS_INSTALLED[] = true
     return true
+end
+
+# Read from the footer's task while the REPL's task edits the buffer. A keystroke
+# landing between this check and the erase blanks input from the screen, not from
+# the buffer, and the line editor redraws it on the next keystroke.
+function REPLicant.Footers.__input_at_end(::Nothing)
+    (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return true
+    mistate = Base.active_repl.mistate
+    mistate isa LineEdit.MIState || return true
+    return eof(LineEdit.buffer(mistate))
+end
+
+# Called from the footer's task, like `__input_at_end`, so a keystroke in the same
+# instant can race it and leave the line drawn twice until the next keystroke.
+function REPLicant.Footers.__redraw_prompt(::Nothing)
+    (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return nothing
+    mistate = Base.active_repl.mistate
+    mistate isa LineEdit.MIState || return nothing
+    LineEdit.refresh_line(mistate)
+    return nothing
 end
 
 #

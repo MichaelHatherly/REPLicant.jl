@@ -13,10 +13,10 @@
     for i in 1:total
         REPLicant._record_activity(:socket, "x$i = $i", "$i", false)
     end
-    @test length(REPLicant.ACTIVITY_LOG) == REPLicant.MAX_LOG_ENTRIES
+    @test length(REPLicant.ACTIVITY.entries) == REPLicant.MAX_LOG_ENTRIES
     # Sequence numbers are monotonic and reach the total pushed.
-    @test REPLicant.ACTIVITY_LOG[end].seq == total
-    @test issorted(entry.seq for entry in REPLicant.ACTIVITY_LOG)
+    @test REPLicant.ACTIVITY.entries[end].seq == total
+    @test issorted(entry.seq for entry in REPLicant.ACTIVITY.entries)
 
     # Default render window is the last DEFAULT_LOG_ENTRIES; an explicit count caps it.
     body = REPLicant._render_activity_log("5")
@@ -69,11 +69,11 @@ end
     REPLicant._record_repl_input(code)
     REPLicant._record_repl_input("done")
     limit = REPLicant.MAX_ENTRY_OUTPUT_BYTES + ncodeunits("\n[code truncated]")
-    for entry in REPLicant.ACTIVITY_LOG
+    for entry in REPLicant.ACTIVITY.entries
         @test contains(entry.code, "code truncated")
         @test ncodeunits(entry.code) <= limit
     end
-    @test length(REPLicant.ACTIVITY_LOG) == 2
+    @test length(REPLicant.ACTIVITY.entries) == 2
 end
 
 @testitem "activity_skips_empty_code" tags = [:activity] setup = [Utilities] begin
@@ -81,7 +81,7 @@ end
 
     Utilities.reset_activity()
     REPLicant._record_activity(:socket, "   ", "output", false)
-    @test isempty(REPLicant.ACTIVITY_LOG)
+    @test isempty(REPLicant.ACTIVITY.entries)
     @test contains(REPLicant._render_activity_log(""), "no matching entries")
 end
 
@@ -147,9 +147,9 @@ end
 
     # A second input finalizes the first entry into the ring and opens a new one.
     REPLicant._record_repl_input("y = 2")
-    @test length(REPLicant.ACTIVITY_LOG) == 1
-    @test REPLicant.ACTIVITY_LOG[1].code == "x = 41"
-    @test contains(REPLicant.ACTIVITY_LOG[1].output, "hello")
+    @test length(REPLicant.ACTIVITY.entries) == 1
+    @test REPLicant.ACTIVITY.entries[1].code == "x = 41"
+    @test contains(REPLicant.ACTIVITY.entries[1].output, "hello")
 end
 
 @testitem "activity_captures_repl_display" tags = [:activity] setup = [Utilities] begin
@@ -202,7 +202,7 @@ end
             REPLicant._evaluate(code, 1, mod, "")
             wait(Base.invokelatest(getproperty, mod, :t))
         end
-        @test !contains(String(copy(REPLicant.CURRENT_HUMAN_ENTRY[].out)), "agent-bg")
+        @test !contains(String(copy(REPLicant.ACTIVITY.open.out)), "agent-bg")
     end
 end
 
@@ -216,7 +216,7 @@ end
     Utilities.outside_capture() do
         print(router, repeat("a", REPLicant.MAX_ENTRY_OUTPUT_BYTES + 500))
     end
-    entry = REPLicant.CURRENT_HUMAN_ENTRY[]
+    entry = REPLicant.ACTIVITY.open
     @test entry !== nothing
     @test length(entry.out) == REPLicant.MAX_ENTRY_OUTPUT_BYTES
 end

@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Keep a server process's running servers in one table. Exit cleanup and output routing each kept their own set under their own lock, so the two could drift apart. The activity log and the footer's repaint state move out of module globals into the `ActivityLog` and `Footer` structs. No behaviour change [#84]
 - Reject `--module Main`: the default session is addressed by omitting `--module`, so a session named `Main` would be a distinct module shadowing that name. Eval and `reset` both error with that guidance instead of handing back a decoy [#42]
 - Run each eval in the caller's working directory: the client sends its directory with the request, so relative paths resolve where `julia +rpc` was invoked rather than where the server started, and a `cd` inside an eval no longer leaks to the next. Override with `--dir <path>` [#41]
 - Refuse to evaluate when no server owns the caller's directory and no explicit selector is given, listing the candidates instead of silently running against another project's server. Target a foreign server on purpose with `--port`, `--project`, or `--name` [#41][#42]
@@ -43,6 +44,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Clear the copy of the footer a widening terminal leaves behind. Some terminals rejoin wrapped lines as they widen. The rejoining can lift the old footer into the blank rows below the prompt, and it stayed there as a second status row. The next repaint now erases from the cursor down. While the cursor is mid-edit the erase waits, so typed input is never lost [#85]
+- Keep the prompt on screen when a terminal with the footer enabled loses height. The footer's row stopped the terminal trimming the blank rows below the prompt, so the prompt scrolled off the top and the screen stayed blank until the next keystroke. The REPL now redraws its prompt and input after the shrink [#85]
 - Refuse a `--timeout` too large for the read timer, such as `inf`. It passed validation, so the client sent the eval and then failed with an `InexactError` while the eval kept running on the server [#83]
 - Rewrite a registry entry in one step on macOS and Linux under Julia 1.10 and 1.11. There `mv(; force = true)` removes the old entry before renaming the new one, so a client reading during `label!` found no server, or no token and an `Unauthorized` reply [#83]
 - Evaluate with the REPL's soft scope rules. `x = 0; for i in 1:3; x += i; end` threw `UndefVarError` over the socket while working at the prompt [#83]
@@ -183,3 +186,5 @@ Initial Public Release
 [#81]: https://github.com/MichaelHatherly/REPLicant.jl/issues/81
 [#82]: https://github.com/MichaelHatherly/REPLicant.jl/issues/82
 [#83]: https://github.com/MichaelHatherly/REPLicant.jl/issues/83
+[#84]: https://github.com/MichaelHatherly/REPLicant.jl/issues/84
+[#85]: https://github.com/MichaelHatherly/REPLicant.jl/issues/85

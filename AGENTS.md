@@ -44,7 +44,9 @@ Three parts. The code is the reference; this is the map:
 
 - **Server** (`src/REPLicant.jl`): listens on a dynamic port, evaluates
   length-prefixed requests in a persistent module, registers itself in the shared
-  registry directory.
+  registry directory. One worker runs evals one at a time. Each eval points fds
+  1/2 at its capture file and runs in the caller's cwd. Both belong to the whole
+  process, so evals must not overlap, and no lock can make overlapping evals safe.
 - **Client** (`REPLicant.cli`, via `bin/client.jl`): reads the registry, resolves
   a target, forwards the request. The `rpc` juliaup channel runs it.
 - **Registry**: one `key=value` file per live server, so any client finds every
