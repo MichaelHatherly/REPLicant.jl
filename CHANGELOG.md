@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Refuse a `--timeout` too large for the read timer, such as `inf`. It passed validation, so the client sent the eval and then failed with an `InexactError` while the eval kept running on the server [#83]
-- Rewrite a registry entry in one step on Julia 1.10 and 1.11. There `mv(; force = true)` removes the old entry before renaming the new one, so a client reading during `label!` found no server, or no token and an `Unauthorized` reply [#83]
+- Rewrite a registry entry in one step on macOS and Linux under Julia 1.10 and 1.11. There `mv(; force = true)` removes the old entry before renaming the new one, so a client reading during `label!` found no server, or no token and an `Unauthorized` reply [#83]
 - Evaluate with the REPL's soft scope rules. `x = 0; for i in 1:3; x += i; end` threw `UndefVarError` over the socket while working at the prompt [#83]
 - Keep the terminal when `julia +rpc restart` lands during a running eval. That eval held fd 1/2 on its capture file, and `execv` passed them to the new process, so the restarted REPL wrote into a deleted file [#83]
 - Close a server without waiting out its running eval. `close(server)` waited for the eval and then ran every queued one, and the registry entry stayed until they all finished. Closing now interrupts the running eval, removes the entry, and answers queued requests with "Server shutting down" [#83]
@@ -182,3 +182,4 @@ Initial Public Release
 [#80]: https://github.com/MichaelHatherly/REPLicant.jl/issues/80
 [#81]: https://github.com/MichaelHatherly/REPLicant.jl/issues/81
 [#82]: https://github.com/MichaelHatherly/REPLicant.jl/issues/82
+[#83]: https://github.com/MichaelHatherly/REPLicant.jl/issues/83

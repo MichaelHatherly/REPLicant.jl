@@ -97,8 +97,14 @@ function _write_registry_entry(
             write(io, _registry_entry(port, project; token, name, started))
         end
         # `rename` replaces in one step. Before Julia 1.12, `mv(; force)` removes the
-        # old entry first, so a concurrent reader could find none.
-        Base.Filesystem.rename(temp, path)
+        # old entry first, so a concurrent reader could find none. Windows refuses to
+        # replace a file another process has open, so there `mv` falls back to
+        # removing it first, and readers tolerate the gap.
+        @static if Sys.iswindows()
+            mv(temp, path; force = true)
+        else
+            Base.Filesystem.rename(temp, path)
+        end
     catch error
         isfile(temp) && rm(temp; force = true)
         rethrow(error)
