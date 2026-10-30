@@ -13,12 +13,35 @@
         return `$exec --startup-file=no --project=$(pkgdir(REPLicant))`
     end
 
-    # The methods a process compiled at runtime that REPLicant owns or specializes on,
-    # and the socket callbacks libuv calls on its connections. A process that compiled
-    # nothing leaves no trace file.
+    # The methods a process compiled at runtime. A process that compiled nothing leaves
+    # no trace file.
+    compiles(trace) = isfile(trace) ? readlines(trace) : String[]
+
+    # Those that REPLicant owns or specializes on, and the socket callbacks libuv calls
+    # on its connections.
     function owned_compiles(trace)
-        isfile(trace) || return String[]
-        return filter(line -> contains(line, "REPLicant") || contains(line, "Sockets"), readlines(trace))
+        return filter(line -> contains(line, "REPLicant") || contains(line, "Sockets"), compiles(trace))
+    end
+
+    # Base methods over Base types that a client compiles before Julia 1.12 whatever the
+    # image holds: a `precompile` directive for them leaves them compiling at runtime.
+    # The condition methods are those `connect` waits on and its callback notifies.
+    BASE_ONLY = VERSION < v"1.12" ? [
+            "precompile(Tuple{typeof(Base.lock), Base.GenericCondition{Base.Threads.SpinLock}})",
+            "precompile(Tuple{typeof(Base.notify), Base.GenericCondition{Base.Threads.SpinLock}})",
+            "precompile(Tuple{typeof(Base.unlock), Base.GenericCondition{Base.Threads.SpinLock}})",
+            "precompile(Tuple{typeof(Base.repeat), Char, Int64})",
+        ] : String[]
+
+    # What a client process compiles just to start and load the client build, which no
+    # workload of REPLicant's can reach.
+    function client_baseline(julia, env, tmp)
+        script = joinpath(tmp, "baseline.jl")
+        client_mode = joinpath(pkgdir(REPLicant), "bin", "client-mode")
+        write(script, "push!(LOAD_PATH, $(repr(client_mode)))\nusing REPLicant\nexit(0)\n")
+        trace = joinpath(tmp, "baseline.txt")
+        run(setenv(`$julia --trace-compile=$trace $script`, env))
+        return compiles(trace)
     end
 
     # Start a server the way `julia +rpc start` does, after running `preamble` (which
@@ -43,11 +66,12 @@
             try
                 port = wait_for_port(registry, proc)
                 client = joinpath(pkgdir(REPLicant), "bin", "client.jl")
+                baseline = client_baseline(julia, env, tmp)
                 for (index, args) in enumerate(client_commands(port))
                     trace = joinpath(tmp, "client-$index.txt")
                     command = setenv(`$julia --trace-compile=$trace $client $args`, env; dir = work)
                     finished = finishes(pipeline(ignorestatus(command); stdin = devnull, stdout = devnull, stderr = devnull))
-                    push!(clients, args => finished ? owned_compiles(trace) : ["timed out"])
+                    push!(clients, args => finished ? setdiff(compiles(trace), baseline, BASE_ONLY) : ["timed out"])
                 end
                 finishes(proc) || return (; clients, server = ["did not exit"; readlines(log)])
             finally
@@ -99,7 +123,7 @@
         ]
     end
 
-    # The client commands that compiled anything of REPLicant's.
+    # The client commands that compiled anything at runtime, or the server's own code.
     compiling_clients(result) = filter(pair -> !isempty(last(pair)), result.clients)
 end
 

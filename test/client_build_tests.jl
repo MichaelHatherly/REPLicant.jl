@@ -19,3 +19,21 @@
     # loads with the client build too, and must load cleanly.
     @test String(take!(err)) == ""
 end
+
+@testitem "client_build_compiles_nothing_to_find_the_registry" tags = [:precompile] setup = [Precompiled] begin
+    import REPLicant
+    client_mode = joinpath(pkgdir(REPLicant), "bin", "client-mode")
+    registry = mktempdir()
+    # What `call` compiles at runtime in the client build, beyond what loading it does.
+    function compiles(call)
+        script = "push!(LOAD_PATH, $(repr(client_mode))); using REPLicant; $call"
+        trace = tempname()
+        command = `$(Precompiled.julia_cmd()) --trace-compile=$trace -e $script`
+        run(addenv(command, "REPLICANT_DIR" => registry))
+        return isfile(trace) ? readlines(trace) : String[]
+    end
+    compiles("nothing")
+    # Every client call looks up the registry, building the default path's name even
+    # when `REPLICANT_DIR` overrides it.
+    @test setdiff(compiles("REPLicant._registry_dir()"), compiles("nothing")) == String[]
+end

@@ -23,7 +23,8 @@ function _client_workload_session(dir::String)
     return nothing
 end
 
-# Answer pings with an idle pong and every other request with a fixed value.
+# Answer pings with an idle pong and every other request with the output of the
+# workload's `for` loop, enough lines for `--head-lines` and `--tail-lines` to elide.
 function _workload_acceptor(listener::Sockets.TCPServer, token::String)
     while isopen(listener)
         sock = try
@@ -36,7 +37,7 @@ function _workload_acceptor(listener::Sockets.TCPServer, token::String)
             if !isnothing(frame) && frame.type == REQUEST_PING
                 _write_frame(sock, RESPONSE_PONG, "")
             else
-                _write_frame(sock, RESPONSE_OK, "1\n")
+                _write_frame(sock, RESPONSE_OK, "1\n2\n3\n")
             end
         finally
             close(sock)
