@@ -62,8 +62,9 @@
         # keyword's `getfield`. Rejecting a request for its content adds the
         # `RequestError` constructor's field `convert` and its `@debug` log's
         # `shouldlog` pair. Refusing an unknown session adds a `string` over the
-        # `AbstractString` name.
-        SOUND_LIMIT = 707   # JET.report_package(REPLicant; mode = :sound)
+        # `AbstractString` name. Handing a spawned child the router's stream adds a
+        # `setup_stdio` call over the abstract real stream and its uncovered match.
+        SOUND_LIMIT = 709   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

@@ -165,7 +165,7 @@ function Base.setup_stdio(r::Router, child_readable::Bool)
     return Base.setup_stdio(child_readable ? r.real[] : _spawn_stream(_routed(r)), child_readable)
 end
 _spawn_stream(s::CaptureSink) = s.file
-_spawn_stream(io::IO) = io
+_spawn_stream(io) = io
 
 # `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
 # wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
@@ -283,7 +283,7 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
         if errored
             _error_message(buffer, result, id)
         elseif _echo_object(result.value) && !_ends_with_semicolon(code)
-            errored = !_show_value(buffer, result, mod)
+            errored = !_show_value(buffer, result.value, mod)
         end
 
         return (; output = String(take!(buffer)), errored)
@@ -379,15 +379,15 @@ end
 # Show the value into `buffer`, returning whether it showed. A `show` that throws is
 # reported the way the REPL reports it, with its backtrace cut above `_show_object`
 # so only the frames of the failing `show` remain.
-function _show_value(buffer, result, mod)
+function _show_value(buffer::IOBuffer, value, mod::Module)
     shown = IOBuffer()
     try
-        _show_object(shown, result, mod)
+        _show_object(shown, (; value), mod)
     catch err
         bt = Base.scrub_repl_backtrace(catch_backtrace())
         cut = findfirst(x -> x.func === :_show_object, bt)
         isnothing(cut) || (bt = bt[1:(cut - 1)])
-        println(IOContext(buffer, :module => mod), "Error showing value of type ", typeof(result.value), ":")
+        println(IOContext(buffer, :module => mod), "Error showing value of type ", typeof(value), ":")
         print(buffer, "ERROR: ")
         Base.invokelatest(showerror, buffer, err, bt)
         return false
