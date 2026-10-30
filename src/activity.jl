@@ -77,18 +77,14 @@ function _cap(s::AbstractString; label::String = "output")
     return String(take!(io)) * "\n[$label truncated]"
 end
 
-# The open entry's bytes as a valid string. The tee caps by raw byte count and can
-# split a multibyte character at the boundary, so trim back to the last valid prefix.
+# The open entry's bytes as a string. The tee caps by raw byte count and can split a
+# multibyte character at the boundary, so drop a final character left incomplete.
+# Invalid bytes elsewhere are the program's own output and stay.
 function _valid_prefix(bytes::Vector{UInt8})
     s = String(copy(bytes))
-    isvalid(s) && return s
-    n = length(bytes)
-    while n > 0
-        n -= 1
-        s = String(bytes[1:n])
-        isvalid(s) && return s
-    end
-    return ""
+    isempty(s) && return s
+    last = thisind(s, ncodeunits(s))
+    return isvalid(s[last]) ? s : s[1:prevind(s, last)]
 end
 
 # Record an agent (`:socket`) evaluation: its code and rendered response body, the

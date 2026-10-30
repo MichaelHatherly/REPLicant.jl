@@ -47,6 +47,17 @@ end
     @test REPLicant._cap("short") == "short"
 end
 
+@testitem "activity_human_output_keeps_text_past_a_bad_byte" tags = [:activity] begin
+    import REPLicant
+
+    # Only a character split at the byte cap is trimmed. An invalid byte earlier on,
+    # such as binary or Latin-1 output, keeps what follows it.
+    @test REPLicant._valid_prefix([0xff; Vector{UInt8}("hello")]) == "\xffhello"
+    @test REPLicant._valid_prefix(codeunits("aπ")[1:2]) == "a"
+    @test REPLicant._valid_prefix(Vector{UInt8}("aπ")) == "aπ"
+    @test REPLicant._valid_prefix(UInt8[]) == ""
+end
+
 @testitem "activity_code_capped" tags = [:activity] setup = [Utilities] begin
     import REPLicant
 
