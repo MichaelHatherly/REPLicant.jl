@@ -198,19 +198,20 @@ end
     # A saved server runs `julia +rpc help` once it registers, so the channel's client
     # image is built before the next client call needs it. Unsaved servers, as test
     # suites start them, leave it alone. A stand-in `julia` on `PATH` records the call.
+    # It is a shell script, and Windows spawns only executables, so it runs elsewhere.
     mktempdir() do bin
         calls = joinpath(bin, "calls")
-        julia = joinpath(bin, Sys.iswindows() ? "julia.bat" : "julia")
-        write(julia, Sys.iswindows() ? "@echo %* >> \"$calls\"\r\n" : "#!/bin/sh\necho \"\$@\" >> '$calls'\n")
+        julia = joinpath(bin, "julia")
+        write(julia, "#!/bin/sh\necho \"\$@\" >> '$calls'\n")
         chmod(julia, 0o755)
-        withenv("PATH" => bin * (Sys.iswindows() ? ";" : ":") * ENV["PATH"]) do
+        withenv("PATH" => bin * ":" * ENV["PATH"]) do
             Utilities.without_current_server() do
                 Utilities.withproject() do start, registry
                     start()
                     start(; save = true)
-                    @test timedwait(() -> isfile(calls), 10) === :ok
+                    @test timedwait(() -> isfile(calls), 10) === :ok skip = Sys.iswindows()
                     sleep(0.5)
-                    @test strip.(readlines(calls)) == ["+rpc help"]
+                    @test strip.(readlines(calls)) == ["+rpc help"] skip = Sys.iswindows()
                 end
             end
         end
