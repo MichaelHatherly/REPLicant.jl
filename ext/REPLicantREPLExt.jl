@@ -22,23 +22,18 @@ end
 # Busy indicator: set the terminal title while a remote evaluation is in flight.
 #
 
-const TERMINAL = Ref{Any}(nothing)
-
-# The server starts from startup.jl before the interactive REPL exists, so resolve
-# the terminal lazily on first signal.
-function _terminal()
-    TERMINAL[] === nothing || return TERMINAL[]
+# The server starts from startup.jl before the interactive REPL exists, so look the
+# terminal up on each signal.
+function REPLicant.__notify_busy(::Nothing)
     (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return nothing
-    return TERMINAL[] = Base.active_repl.t
+    return _write_title(Base.active_repl.t, REPLicant._is_busy())
 end
 
-function REPLicant.__notify_busy(::Nothing)
-    terminal = _terminal()
-    terminal === nothing && return nothing
-    # OSC 2 sets the title on the real terminal, bypassing the stdout redirection
-    # that eval installs. One write, so a footer repaint from another task cannot
-    # land inside the sequence and leave the title printed as text.
-    title = REPLicant._is_busy() ? "● julia — remote eval" : "julia"
+# OSC 2 sets the title on the real terminal, bypassing the stdout redirection that
+# eval installs. One write, so a footer repaint from another task cannot land inside
+# the sequence and leave the title printed as text.
+function _write_title(terminal::IO, busy::Bool)
+    title = busy ? "● julia — remote eval" : "julia"
     write(terminal, "\e]2;$title\a")
     return nothing
 end
