@@ -21,6 +21,10 @@
 
     @test_throws Exception REPLicant._parse_args(["--port=abc"])
     @test_throws Exception REPLicant._parse_args(["--port"])
+    # Not a port, so not silently "no port" either.
+    @test_throws Exception REPLicant._parse_args(["--port=0"])
+    @test_throws Exception REPLicant._parse_args(["--port=-1"])
+    @test_throws Exception REPLicant._parse_args(["--port=65536"])
     @test_throws Exception REPLicant._parse_args(["--bogus"])
 
     # Line-eliding flags parse to Ints; unset is nothing.

@@ -218,7 +218,7 @@ end
 # other mode is harmless: each caller reads only the fields it acts on.
 function _parse_args(args::Vector{String})
     values, bare, file, script_args = _tokenize_args(args)
-    port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
+    port = haskey(values, "--port") ? _parse_number(Int, values["--port"], in(1:65535), "--port") : -1
     timeout = haskey(values, "--timeout") ?
         _parse_number(Float64, values["--timeout"], t -> 0 < t < MAX_TIMEOUT_SECONDS, "--timeout") :
         nothing
@@ -246,12 +246,6 @@ function _parse_args(args::Vector{String})
         tail_lines,
         force = !isempty(bare),
     )
-end
-
-function _parse_port(value::AbstractString)
-    port = tryparse(Int, value)
-    isnothing(port) && error("invalid --port: $value")
-    return port
 end
 
 # Parse a flag value as a number of type `T`, rejecting a non-number or one the
