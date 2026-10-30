@@ -117,9 +117,13 @@
     # `registry`, rooted at `work`. Waits for its registry entry, then runs
     # `func(port, pid)` against the live process. The subprocess is killed on exit;
     # returns the entry path so a test can assert it was cleaned up. Used by kill
-    # tests, which must target a process other than the test runner.
-    function spawn_server(func, registry, work)
-        script = "using REPLicant; s = REPLicant.Server(); take!(s.channel); wait(s.task)"
+    # tests, which must target a process other than the test runner. The server
+    # prints `server up` to `out` once it listens.
+    function spawn_server(func, registry, work; out = devnull)
+        script = """
+        using REPLicant; s = REPLicant.Server(); take!(s.channel)
+        println("server up"); flush(stdout); wait(s.task)
+        """
         project = pkgdir(REPLicant)
         env = copy(ENV)
         env["REPLICANT_DIR"] = registry
@@ -128,7 +132,7 @@
             env;
             dir = work,
         )
-        proc = run(pipeline(cmd; stdout = devnull, stderr = devnull); wait = false)
+        proc = run(pipeline(cmd; stdout = out, stderr = devnull); wait = false)
         return try
             entry_path = _wait_for_entry(registry)
             fields = REPLicant._parse_registry_entry(entry_path)

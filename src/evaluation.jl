@@ -116,9 +116,7 @@ end
 function _keep_capture_fds()
     target = CAPTURE_TARGET[]
     target isa CaptureSink || return nothing
-    Base._redirect_io_libc(target.file, 1)
-    Base._redirect_io_libc(target.file, 2)
-    return nothing
+    return _point_fds(target.file)
 end
 
 # The interactive REPL pushes its own display after routing is installed, and that
@@ -210,6 +208,18 @@ _spawn_stream(io) = io
 _fd_stream(io::IO) = io
 _fd_stream(io::Base.IOContext) = _fd_stream(io.io)
 
+# Dup `out` onto fd 1 and `err` onto fd 2. `_redirect_io_libc` is the primitive
+# `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle` handled
+# internally).
+function _point_fds(out::IO, err::IO = out)
+    Base._redirect_io_libc(out, 1)
+    Base._redirect_io_libc(err, 2)
+    return nothing
+end
+
+# Point fd 1/2 back at the streams routing replaced, undoing a capture's redirect.
+_restore_real_fds() = _point_fds(_fd_stream(REAL_OUT[]), _fd_stream(REAL_ERR[]))
+
 # Run `f` with its output captured, returning the captured text alongside the
 # value (or the thrown exception and its backtrace). InterruptException is rethrown
 # so long-running code stays interruptible.
@@ -235,11 +245,8 @@ function _capture(f)
         sink = CaptureSink(file)
         outer = CAPTURE_TARGET[]
         # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
-        # those stay the routers. `_redirect_io_libc` is the primitive
-        # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle`
-        # handled internally).
-        Base._redirect_io_libc(file, 1)
-        Base._redirect_io_libc(file, 2)
+        # those stay the routers.
+        _point_fds(file)
         logger = Logging.ConsoleLogger(sink)
 
         value, errored, backtrace = with(CAPTURE_TARGET => sink) do
@@ -261,13 +268,7 @@ function _capture(f)
                     # rather than flushed to the terminal at process exit.
                     Base.Libc.flush_cstdio()
                     # A nested capture hands fd 1/2 back to the one around it.
-                    if outer isa CaptureSink
-                        Base._redirect_io_libc(outer.file, 1)
-                        Base._redirect_io_libc(outer.file, 2)
-                    else
-                        Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
-                        Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
-                    end
+                    outer isa CaptureSink ? _point_fds(outer.file) : _restore_real_fds()
                 end
             end
         end
