@@ -81,8 +81,43 @@ function _install_routing!()
     REAL_ERR[] = stderr
     redirect_stdout(Router(REAL_OUT))
     redirect_stderr(Router(REAL_ERR))
+    _keep_capture_fds()
     pushdisplay(RouterDisplay())
     ROUTING_INSTALLED[] = true
+    return nothing
+end
+
+# The running servers that share this process's routing. Only the last one to stop
+# uninstalls it, so a server closing does not take routing from the others, as when
+# a warm session's test suite starts and closes servers of its own.
+const ROUTING_SERVERS = Base.IdSet{Server}()
+const ROUTING_LOCK = ReentrantLock()
+
+function _acquire_routing!(srv::Server)
+    Base.@lock ROUTING_LOCK begin
+        push!(ROUTING_SERVERS, srv)
+        _install_routing!()
+    end
+    return nothing
+end
+
+# Idempotent per server: shutdown runs from both the serve loop and `atexit`.
+function _release_routing!(srv::Server)
+    Base.@lock ROUTING_LOCK begin
+        srv in ROUTING_SERVERS || return nothing
+        delete!(ROUTING_SERVERS, srv)
+        isempty(ROUTING_SERVERS) && _uninstall_routing!()
+    end
+    return nothing
+end
+
+# `redirect_stdout`/`redirect_stderr` dup the new stream's fd onto fd 1/2. Inside a
+# capture those fds belong to the capture, so hand them back to it.
+function _keep_capture_fds()
+    target = CAPTURE_TARGET[]
+    target isa CaptureSink || return nothing
+    Base._redirect_io_libc(target.file, 1)
+    Base._redirect_io_libc(target.file, 2)
     return nothing
 end
 
@@ -101,6 +136,7 @@ function _uninstall_routing!()
     ROUTING_INSTALLED[] || return nothing
     redirect_stdout(REAL_OUT[])
     redirect_stderr(REAL_ERR[])
+    _keep_capture_fds()
     # The REPL may have pushed its own display on top since routing was installed.
     popdisplay(RouterDisplay())
     ROUTING_INSTALLED[] = false
@@ -125,9 +161,9 @@ function Base.write(s::CaptureSink, b::UInt8)
     flush(s.file)
     return written
 end
-Base.flush(s::CaptureSink) = flush(s.file)
+Base.flush(s::CaptureSink) = flush(s.file)  # dendro-ignore: duplicate -- one-line delegation to the capture file
 # `ConsoleLogger` falls back to `stderr` when its stream reports closed.
-Base.isopen(s::CaptureSink) = isopen(s.file)
+Base.isopen(s::CaptureSink) = isopen(s.file)  # dendro-ignore: duplicate -- one-line delegation to the capture file
 
 # A fresh read-write file for one eval's output that leaves nothing behind when its
 # last descriptor closes, even when `kill --force` ends a runaway eval and skips every
@@ -306,8 +342,8 @@ end
 # block would, so script files and `include` run inside it.
 function _new_session(sym::Symbol)
     mod = Module(sym)
-    Core.eval(mod, :(eval(x) = $(Core.eval)($mod, x)))
-    Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))
+    Core.eval(mod, :(eval(x) = $(Core.eval)($mod, x)))  # dendro-ignore: duplicate -- the `module` block's own `eval` binding
+    Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))  # dendro-ignore: duplicate -- the `module` block's own `include` binding
     return mod
 end
 

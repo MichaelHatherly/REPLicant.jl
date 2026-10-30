@@ -1,0 +1,3 @@
+# Every test item lives under `test/`. Scoping the search there also skips the
+# copies of the suite in git worktrees under `.claude/worktrees`.
+include = ["test/**"]
