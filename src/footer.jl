@@ -632,7 +632,7 @@ its input channel again is what says the eval is over.
 """
 function prompt_evaluating(backend = repl_backend())
     backend === nothing && return false
-    hasproperty(backend, :in_eval) && backend.in_eval || return false
+    hasproperty(backend, :in_eval) && backend.in_eval === true || return false
     hasproperty(backend, :repl_channel) || return true
     return !awaiting_input(backend.repl_channel)
 end
