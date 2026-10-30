@@ -5,8 +5,8 @@
 const RPC_CHANNEL = "rpc"
 
 # The client script the `rpc` channel runs. Derives from the installed package
-# dir, so it refreshes whenever a server re-installs the channel after a version
-# bump. The client runs in the default environment (no `--project`) so REPLicant
+# dir, so rerunning `install_channel` after the package moves points the channel
+# at the new copy. The client runs in the default environment (no `--project`) so REPLicant
 # stays out of the worked-on project's dependencies, like Revise; it lives in the
 # global env, where `using REPLicant` resolves for the client.
 # `pkgdir` is `nothing` only for a module outside a package; REPLicant always
