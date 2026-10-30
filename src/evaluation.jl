@@ -161,9 +161,9 @@ function Base.write(s::CaptureSink, b::UInt8)
     flush(s.file)
     return written
 end
-Base.flush(s::CaptureSink) = flush(s.file)
+Base.flush(s::CaptureSink) = flush(s.file)  # dendro-ignore: duplicate -- one-line delegation to the capture file
 # `ConsoleLogger` falls back to `stderr` when its stream reports closed.
-Base.isopen(s::CaptureSink) = isopen(s.file)
+Base.isopen(s::CaptureSink) = isopen(s.file)  # dendro-ignore: duplicate -- one-line delegation to the capture file
 
 # A fresh read-write file for one eval's output that leaves nothing behind when its
 # last descriptor closes, even when `kill --force` ends a runaway eval and skips every
@@ -342,8 +342,8 @@ end
 # block would, so script files and `include` run inside it.
 function _new_session(sym::Symbol)
     mod = Module(sym)
-    Core.eval(mod, :(eval(x) = $(Core.eval)($mod, x)))
-    Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))
+    Core.eval(mod, :(eval(x) = $(Core.eval)($mod, x)))  # dendro-ignore: duplicate -- the `module` block's own `eval` binding
+    Core.eval(mod, :(include(path) = $(Base.include)($mod, path)))  # dendro-ignore: duplicate -- the `module` block's own `include` binding
     return mod
 end
 
