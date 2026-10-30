@@ -269,8 +269,11 @@ end
 # listener open: closing it ends the server task, and a script blocked on that task
 # would return and exit the process before the re-exec.
 function _exit_cleanup()
-    registered = Base.@lock SERVERS_LOCK [srv => reg for (srv, reg) in SERVERS if reg !== nothing]
-    for (srv, (listener, entry_path)) in registered
+    registered = Tuple{Server, Sockets.TCPServer, String}[]
+    Base.@lock SERVERS_LOCK for (srv, registration) in SERVERS
+        registration === nothing || push!(registered, (srv, registration[1], registration[2]))
+    end
+    for (srv, listener, entry_path) in registered
         try
             RESTARTING[] ? _unregister!(srv, entry_path) :
                 _shutdown_server(listener, srv, entry_path)
