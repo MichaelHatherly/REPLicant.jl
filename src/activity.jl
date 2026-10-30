@@ -37,29 +37,40 @@ mutable struct OpenEntry
     out::Vector{UInt8}
 end
 
-# One lock guards the ring, the open entry, and the sequence counter. The three
-# writers (REPL backend task, worker eval task, dispatcher read) touch the log
-# rarely, so contention is near zero; the tee's hot path skips the lock entirely with
-# a nil-check before acquiring (see `_tee_human`).
-const ACTIVITY_LOCK = ReentrantLock()
-const ACTIVITY_LOG = LogEntry[]
-const CURRENT_HUMAN_ENTRY = Ref{Union{OpenEntry, Nothing}}(nothing)
-const ACTIVITY_SEQ = Ref(0)
+# The ring of closed entries, the human's open entry, and the sequence counter, under
+# one lock. The three writers (REPL backend task, worker eval task, dispatcher read)
+# touch the log rarely, so contention is near zero; the tee's hot path skips the lock
+# entirely with a nil-check of `open` before acquiring (see `_tee_human`).
+mutable struct ActivityLog
+    lock::ReentrantLock
+    entries::Vector{LogEntry}
+    open::Union{OpenEntry, Nothing}
+    seq::Int
+end
+ActivityLog() = ActivityLog(ReentrantLock(), LogEntry[], nothing, 0)
+
+const ACTIVITY = ActivityLog()
+
+function Base.empty!(activity::ActivityLog)
+    Base.@lock activity.lock begin
+        empty!(activity.entries)
+        activity.open = nothing
+        activity.seq = 0
+    end
+    return activity
+end
 
 const MAX_LOG_ENTRIES = 200
 const MAX_ENTRY_OUTPUT_BYTES = 2048
 const DEFAULT_LOG_ENTRIES = 15
 
-# Next sequence number. Caller holds `ACTIVITY_LOCK`.
-function _next_seq()
-    ACTIVITY_SEQ[] += 1
-    return ACTIVITY_SEQ[]
-end
+# Next sequence number. Caller holds the log's lock.
+_next_seq(activity::ActivityLog) = (activity.seq += 1)
 
-# Drop oldest entries past the cap. Caller holds `ACTIVITY_LOCK`.
-function _evict!()
-    while length(ACTIVITY_LOG) > MAX_LOG_ENTRIES
-        popfirst!(ACTIVITY_LOG)
+# Drop oldest entries past the cap. Caller holds the log's lock.
+function _evict!(activity::ActivityLog)
+    while length(activity.entries) > MAX_LOG_ENTRIES
+        popfirst!(activity.entries)
     end
     return nothing
 end
@@ -92,9 +103,9 @@ end
 # here) is skipped.
 function _record_activity(source::Symbol, code::AbstractString, output::AbstractString, errored::Bool)
     isempty(strip(code)) && return nothing
-    Base.@lock ACTIVITY_LOCK begin
-        push!(ACTIVITY_LOG, LogEntry(_next_seq(), source, Dates.now(), _cap(code; label = "code"), _cap(output), errored))
-        _evict!()
+    Base.@lock ACTIVITY.lock begin
+        push!(ACTIVITY.entries, LogEntry(_next_seq(ACTIVITY), source, Dates.now(), _cap(code; label = "code"), _cap(output), errored))
+        _evict!(ACTIVITY)
     end
     return nothing
 end
@@ -106,30 +117,30 @@ function _record_repl_input(code::AbstractString)
     # The displayed result is teed by `RouterDisplay`, so it must sit above the
     # REPL's own display.
     _raise_router_display!()
-    Base.@lock ACTIVITY_LOCK begin
-        _finalize_open!()
+    Base.@lock ACTIVITY.lock begin
+        _finalize_open!(ACTIVITY)
         isempty(strip(code)) && return nothing
-        CURRENT_HUMAN_ENTRY[] = OpenEntry(_next_seq(), Dates.now(), _cap(code; label = "code"), UInt8[])
+        ACTIVITY.open = OpenEntry(_next_seq(ACTIVITY), Dates.now(), _cap(code; label = "code"), UInt8[])
     end
     return nothing
 end
 
-# Freeze the open entry into the ring. Caller holds `ACTIVITY_LOCK`.
-function _finalize_open!()
-    entry = CURRENT_HUMAN_ENTRY[]
+# Freeze the open entry into the ring. Caller holds the log's lock.
+function _finalize_open!(activity::ActivityLog)
+    entry = activity.open
     entry === nothing && return nothing
-    push!(ACTIVITY_LOG, LogEntry(entry.seq, :repl, entry.time, entry.code, _valid_prefix(entry.out), false))
-    _evict!()
-    CURRENT_HUMAN_ENTRY[] = nothing
+    push!(activity.entries, LogEntry(entry.seq, :repl, entry.time, entry.code, _valid_prefix(entry.out), false))
+    _evict!(activity)
+    activity.open = nothing
     return nothing
 end
 
 # Append bytes to the open entry under the byte cap. Caller has already nil-checked
-# `CURRENT_HUMAN_ENTRY[]` so the inactive path never reaches the lock; re-check inside
-# since the entry can close between the check and the lock.
+# `ACTIVITY.open` so the inactive path never reaches the lock; re-check inside since
+# the entry can close between the check and the lock.
 function _append_human!(bytes::AbstractVector{UInt8})
-    Base.@lock ACTIVITY_LOCK begin
-        entry = CURRENT_HUMAN_ENTRY[]
+    Base.@lock ACTIVITY.lock begin
+        entry = ACTIVITY.open
         entry === nothing && return nothing
         room = MAX_ENTRY_OUTPUT_BYTES - length(entry.out)
         room <= 0 && return nothing
@@ -145,12 +156,12 @@ end
 # entry is open; that mirrors the process-global fd 1/2 capture and is accepted as a
 # rare, cosmetic interleaving.
 function _tee_human(p::Ptr{UInt8}, n::UInt)
-    CURRENT_HUMAN_ENTRY[] === nothing && return nothing
+    ACTIVITY.open === nothing && return nothing
     return _append_human!(unsafe_wrap(Array, p, Int(n)))
 end
 
 function _tee_human(b::UInt8)
-    CURRENT_HUMAN_ENTRY[] === nothing && return nothing
+    ACTIVITY.open === nothing && return nothing
     return _append_human!(UInt8[b])
 end
 
@@ -160,7 +171,7 @@ end
 # the way the REPL renders it (limited, no color), with a trailing newline to match
 # the terminal. Guarded on an open entry so idle sessions pay nothing.
 function _tee_human_display(@nospecialize x)
-    CURRENT_HUMAN_ENTRY[] === nothing && return nothing
+    ACTIVITY.open === nothing && return nothing
     io = IOBuffer()
     try
         show(IOContext(io, :limit => true, :color => false), MIME"text/plain"(), x)
@@ -187,9 +198,9 @@ end
 # lands out of push order, so sort restores the sequence the numbers imply.
 function _render_activity_log(spec::AbstractString)
     parsed = _parse_log_spec(spec)
-    Base.@lock ACTIVITY_LOCK begin
-        entries = copy(ACTIVITY_LOG)
-        open = CURRENT_HUMAN_ENTRY[]
+    Base.@lock ACTIVITY.lock begin
+        entries = copy(ACTIVITY.entries)
+        open = ACTIVITY.open
         open === nothing ||
             push!(entries, LogEntry(open.seq, :repl, open.time, open.code, _valid_prefix(open.out), false))
         sort!(entries; by = entry -> entry.seq)
