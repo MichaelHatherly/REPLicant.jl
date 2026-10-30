@@ -32,7 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Compile what a server and client run on their first request into the package image. A server used to compile around 90 methods at runtime, mostly on its first eval, and the client recompiled its `_send` path for each combination of `--timeout`, `--head-lines`, and `--tail-lines`. The precompile workload now starts a real server and runs every client command against it, and the REPL, Revise, and Test extensions rerun it, since their methods invalidate the package code that calls the hooks they extend. The client wraps its output streams in one concrete type, so a terminal, a pipe, and a file share the same compiled code on every platform. A first eval now costs the same as later ones in a headless server and about 0.02s more with Revise, REPL, and Test loaded [#86]
+- Compile what a server and client run on their first request into the package image. A server used to compile around 90 methods at runtime, mostly on its first eval, and the client recompiled its `_send` path for each combination of `--timeout`, `--head-lines`, and `--tail-lines`. The precompile workload now starts a real server and runs every client command against it, and the REPL, Revise, and Test extensions rerun it, since their methods invalidate the package code that calls the hooks they extend. The client wraps its output streams in one concrete type, so a terminal, a pipe, and a file share the same compiled code on every platform. A first eval now costs the same as later ones in a headless server and about 0.02s more with Revise, REPL, and Test loaded [#87]
 - Keep a server process's running servers in one table. Exit cleanup and output routing each kept their own set under their own lock, so the two could drift apart. The activity log and the footer's repaint state move out of module globals into the `ActivityLog` and `Footer` structs. No behaviour change [#84]
 - Reject `--module Main`: the default session is addressed by omitting `--module`, so a session named `Main` would be a distinct module shadowing that name. Eval and `reset` both error with that guidance instead of handing back a decoy [#42]
 - Run each eval in the caller's working directory: the client sends its directory with the request, so relative paths resolve where `julia +rpc` was invoked rather than where the server started, and a `cd` inside an eval no longer leaks to the next. Override with `--dir <path>` [#41]
@@ -189,4 +189,4 @@ Initial Public Release
 [#83]: https://github.com/MichaelHatherly/REPLicant.jl/issues/83
 [#84]: https://github.com/MichaelHatherly/REPLicant.jl/issues/84
 [#85]: https://github.com/MichaelHatherly/REPLicant.jl/issues/85
-[#86]: https://github.com/MichaelHatherly/REPLicant.jl/issues/86
+[#87]: https://github.com/MichaelHatherly/REPLicant.jl/issues/87
