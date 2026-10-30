@@ -74,8 +74,11 @@
         # `Any` widths and the REPL backend, and keyword `getfield`s on `_cap`,
         # `_kill_target`, and `repaint!`. Holding the activity log in `ActivityLog` and
         # the footer's live predicate and disturbed flag in `Footer` adds their
-        # constructors' field `convert`s.
-        SOUND_LIMIT = 752   # JET.report_package(REPLicant; mode = :sound)
+        # constructors' field `convert`s. Repairing the footer and prompt after a
+        # resize adds the `widened` field's `convert`, the `invokelatest` results of
+        # the REPL extension's input check and prompt redraw, and the `Function`-typed
+        # `on_height_loss` call in `repaint!`.
+        SOUND_LIMIT = 762   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
