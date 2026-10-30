@@ -61,12 +61,16 @@ function display_width(line::AbstractString)
         if c == '\e'
             i = escape_end(line, i)
         else
-            width += textwidth(c)
+            width += textwidth(visible(c))
             i = nextind(line, i)
         end
     end
     return width
 end
+
+# A control character other than ESC would move the cursor out of its row, so it
+# is drawn as a space.
+visible(c::AbstractChar) = iscntrl(c) ? ' ' : c
 
 """
     fit(line, width)
@@ -87,6 +91,7 @@ function fit(line::AbstractString, width::Integer)
             write(io, SubString(line, i, prevind(line, j)))
             i = j
         else
+            c = visible(c)
             w = textwidth(c)
             used + w > width && break
             write(io, c)
@@ -186,7 +191,8 @@ function footer_lines(sections, height::Integer, width::Integer)
         try
             append!(lines, section_lines(section, height, width))
         catch err
-            push!(lines, "\e[31m$label: $(sprint(showerror, err))\e[0m")
+            message = first(split(sprint(showerror, err), '\n'))
+            push!(lines, "\e[31m$label: $message\e[0m")
         end
     end
     return lines

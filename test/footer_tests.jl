@@ -45,6 +45,12 @@ end
     @test F.display_width("\e[31mhello\e[0m") == 5
     @test F.display_width("日本語") == 6
     @test F.display_width("") == 0
+
+    # A control character would move the cursor, so each one shows as a space.
+    @test F.fit("a\tb", 10) == "a b"
+    @test F.display_width("a\tb") == 3
+    @test F.fit("abc\r\nxyz", 10) == "abc  xyz"
+    @test F.fit("a\tb", 2) == "a "
 end
 
 @testitem "footer_lines_from_sections" tags = [:footer] setup = [FooterHarness] begin
@@ -124,6 +130,12 @@ end
     @test lines[1] == "before"
     @test occursin("bad", lines[2]) && occursin("no", lines[2])
     @test lines[3] == "after"
+
+    # A multi-line error message keeps to the one row.
+    multiline(_) = error("first\nsecond")
+    lines = flines(sections((:bad, multiline, nothing)), 24, 80)
+    @test length(lines) == 1
+    @test occursin("first", lines[1]) && !occursin("second", lines[1])
 end
 
 @testitem "footer_paint_row_arithmetic" tags = [:footer] setup = [FooterHarness] begin
