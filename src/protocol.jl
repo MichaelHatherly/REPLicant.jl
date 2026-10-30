@@ -199,16 +199,17 @@ function _read_request(sock::IO, token::String, timeout_seconds::Float64)
 end
 
 # Read and drop `count` body bytes a chunk at a time, holding no more than one chunk.
+# One timeout covers the whole body, as it does for a body that is kept.
 function _discard_body(sock::IO, count::Int; timeout_seconds)
     chunk = Vector{UInt8}(undef, min(count, 64 * 1024))
-    remaining = count
-    while remaining > 0
-        n = min(remaining, length(chunk))
-        read = _read_with_timeout(sock; timeout_seconds) do
-            readbytes!(sock, chunk, n)
-        end::Int
-        read == n || throw(TruncatedFrame(count, count - remaining + read))
-        remaining -= n
+    _read_with_timeout(sock; timeout_seconds) do
+        remaining = count
+        while remaining > 0
+            n = min(remaining, length(chunk))
+            read = readbytes!(sock, chunk, n)::Int
+            read == n || throw(TruncatedFrame(count, count - remaining + read))
+            remaining -= n
+        end
     end
     return nothing
 end
