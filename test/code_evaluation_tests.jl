@@ -164,6 +164,19 @@ end
     @test contains(result.output, " rc=0")
 end
 
+@testitem "eval_capture_file_is_unlinked" tags = [:code_evaluation] begin
+    mod = Module()
+    # With no name, the kernel frees the output when the last descriptor closes, so
+    # a server killed mid-eval leaves nothing behind. Windows can't unlink an open
+    # file.
+    if Sys.iswindows()
+        @test true skip = true
+    else
+        result = REPLicant._evaluate("stat(RawFD(1)).nlink", 1, mod, "")
+        @test strip(result.output) == "0"
+    end
+end
+
 @testitem "eval_keeps_fds_blocking" tags = [:code_evaluation] begin
     mod = Module()
     # Children inherit fd 1/2 with their flags. Non-blocking, a child's write fails

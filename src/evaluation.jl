@@ -131,7 +131,8 @@ _fd_stream(io::Base.IOContext) = _fd_stream(io.io)
 # subprocess and C-library output land there too. A pipe would hold only 64 KB: its
 # write end must be non-blocking for libuv, a flag fd 1/2 and child processes share
 # through the dup, so a larger raw write failed with EAGAIN and lost the output. A
-# file write neither fails that way nor waits on a reader. fd 1 is process-global,
+# file write neither fails that way nor waits on a reader, and outside Windows the
+# file is unlinked while it is written. fd 1 is process-global,
 # so a subprocess launched at the REPL prompt during an eval is captured into that
 # eval; the worker is sequential, so this is rare and accepted.
 function _capture(f)
@@ -141,6 +142,10 @@ function _capture(f)
 
     path, file = mktemp()
     try
+        # Drop the name at once where the OS allows it, so a server killed mid-eval
+        # (`kill --force` on a runaway loop) leaves no output behind on disk or in a
+        # tmpfs. Windows refuses to unlink an open file; the `finally` removes it.
+        Sys.iswindows() || rm(path)
         sink = CaptureSink(file)
         # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
         # those stay the routers. `_redirect_io_libc` is the primitive
