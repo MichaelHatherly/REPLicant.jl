@@ -150,7 +150,11 @@ function _kill_target(
         isnothing(index) && error("no REPLicant server registered on port $port")
         return entries[index]
     end
-    return _select_entry(entries, project, name; err)
+    # A server that died without cleanup leaves an entry that would make selection
+    # ambiguous. Ignore those while any server is still there; with none, the dead
+    # entry still resolves, so `kill` can report it gone and remove it.
+    present = filter(e -> !_server_gone(e.port, e.pid), entries)
+    return _select_entry(isempty(present) ? entries : present, project, name; err)
 end
 
 # Consume the value following a flag at `index`, erroring when the flag ends the
