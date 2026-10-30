@@ -198,20 +198,26 @@ end
 
 """
     label!(name::AbstractString) -> String
+    label!(srv::Server, name::AbstractString) -> String
 
-Label the REPLicant server running in this process so clients can select it with
-`--name`. Run it at the REPL, or send `REPLicant.label!("name")` over the eval
-channel so an agent labels a server it reaches by `--port`.
+Label a REPLicant server so clients can select it with `--name`. Without a handle
+it labels the server running in this process, the saved one when there is one.
+Run it at the REPL, or send `REPLicant.label!("name")` over the eval channel so an
+agent labels a server it reaches by `--port`.
 
 Errors when no server is running in this session, when `name` contains a newline,
 or when another live server in the same project already holds `name`.
 """
 function label!(name::AbstractString)
-    occursin('\n', name) && error("REPLicant label must not contain a newline.")
     srv = CURRENT_SERVER[]
     isnothing(srv) && error("No REPLicant server is running in this session to label.")
-    # A recorded server has bound its port and published its details, so these
-    # fields are set; assert it to drop the `nothing` branch from the union.
+    return label!(srv, name)
+end
+
+function label!(srv::Server, name::AbstractString)
+    occursin('\n', name) && error("REPLicant label must not contain a newline.")
+    # A server has bound its port and published its details by the time a caller
+    # holds a label-worthy handle; assert it to drop the `nothing` branch.
     port = srv.port::Int
     project = srv.project::String
     started = srv.started::Dates.DateTime

@@ -143,7 +143,8 @@ Each label is unique among live servers for a project.
 ### Inspect a server
 
 A server started with `save = true` (as the recommended startup.jl does) holds a
-handle in its session:
+handle in its session. Servers started later without it, as a test suite starts
+them, leave it as the server `label!` and the footer act on:
 
 ```julia
 REPLicant.server()        # the running Server, or nothing

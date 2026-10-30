@@ -27,7 +27,8 @@ evaluates code from clients until closed.
 - `read_timeout_seconds::Float64 = 30.0`: per-request read timeout in seconds.
 - `save::Bool = false`: record the handle so [`server`](@ref) returns it. Use it
   from a session (e.g. `startup.jl`) that starts a server without keeping the
-  return value.
+  return value. Unsaved servers started later, as a test suite starts them, leave
+  it as the server `label!` and the footer act on.
 - `verbose::Bool = false`: log lifecycle and per-connection events. Off by default
   so interactive sessions stay quiet; errors always log.
 
@@ -118,9 +119,7 @@ mutable struct Server
         # Tie the channel's lifetime to the task so a startup failure closes the
         # channel and surfaces the error to `take!` instead of blocking forever.
         bind(srv.channel, srv.task)
-        # Record this process's server so `label!` finds it without a handle and
-        # `server()` can hand it back (gated on `save`).
-        CURRENT_SERVER[] = srv
+        _record_server!(srv)
         return srv
     end
 end
@@ -135,8 +134,18 @@ _default_target(::Nothing) = Base.active_module
 _default_target(f::Base.Callable) = f
 
 # The server running in this process, recorded at construction. `nothing` when
-# none runs here. `label!` reads it; `server()` returns it only when `save`.
+# none runs here. `label!` and the footer read it; `server()` returns it only when
+# `save`.
 const CURRENT_SERVER = Ref{Union{Server, Nothing}}(nothing)
+
+# The latest server takes the slot, except that an unsaved one, as a test suite
+# starts, never displaces a running saved server, the session's own.
+function _record_server!(srv::Server)
+    held = CURRENT_SERVER[]
+    protected = !isnothing(held) && held.save && !istaskdone(held.task)
+    (srv.save || !protected) && (CURRENT_SERVER[] = srv)
+    return nothing
+end
 
 # The running server when started with `save = true`, else `nothing`. For
 # interactive use: `close(REPLicant.server())`.
@@ -283,8 +292,7 @@ end
 function _shutdown_server(listener, srv, entry_path)
     close(listener)
     _uninstall_routing!()
-    # Forget this process's server so a later `label!` can't rewrite a
-    # removed entry.
+    # Forget this process's server so a later `label!` can't rewrite a removed entry.
     CURRENT_SERVER[] === srv && (CURRENT_SERVER[] = nothing)
     # Always remove the registry entry to keep the registry clean.
     return if isfile(entry_path)

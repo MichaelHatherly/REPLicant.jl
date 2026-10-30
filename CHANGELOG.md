@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep `REPLicant.label!`, `REPLicant.server()` and the footer on the session's own server. Every `Server` constructor overwrote the process's current server, so after a warm test run `label!("main")` labeled a closed test server or failed, and `server()` returned `nothing`. An unsaved server no longer displaces a running `save = true` server, so the session's own server stays put. Add `label!(server, name)` to label a server by its handle [#79]
 - Hide the value of an eval whose code ends in `;`, as the REPL does. `julia +rpc -e 'y = 1;'` printed `1`. Printed output still comes through, and a `;` inside a string or followed by a comment is read the way the REPL reads it [#76]
 - Keep the footer on the server it was enabled for. It read the process's current server, which every `Server` constructor overwrites, so running the test suite in a warm session showed each test's server in the row and then "no server" once that server closed [#75]
 - Refuse a `--dir` that does not exist with "no such directory: <path>". The eval failed inside `cd`, and the client printed the raw `Base.IOError(...)` repr while the server logged it as an evaluation error [#74]
@@ -153,3 +154,4 @@ Initial Public Release
 [#74]: https://github.com/MichaelHatherly/REPLicant.jl/issues/74
 [#75]: https://github.com/MichaelHatherly/REPLicant.jl/issues/75
 [#76]: https://github.com/MichaelHatherly/REPLicant.jl/issues/76
+[#79]: https://github.com/MichaelHatherly/REPLicant.jl/issues/79
