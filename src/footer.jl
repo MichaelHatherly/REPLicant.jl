@@ -625,9 +625,21 @@ repl_backend() = isdefined(Base, :active_repl_backend) ? Base.active_repl_backen
 
 Whether code typed at the prompt is running. It owns the screen until it returns,
 and may be a full-screen program like `less` that a paint would draw over.
+
+The backend sets `in_eval` before the code runs but clears it only on a normal
+return, so after an error it stays set at an idle prompt. The backend waiting on
+its input channel again is what says the eval is over.
 """
-prompt_evaluating(backend = repl_backend()) =
-    backend !== nothing && hasproperty(backend, :in_eval) && backend.in_eval
+function prompt_evaluating(backend = repl_backend())
+    backend === nothing && return false
+    hasproperty(backend, :in_eval) && backend.in_eval || return false
+    hasproperty(backend, :repl_channel) || return true
+    return !awaiting_input(backend.repl_channel)
+end
+
+# Whether a task is blocked taking from `channel`: the backend's state between evals.
+awaiting_input(channel::Channel) = !isempty(channel.cond_take.waitq)
+awaiting_input(::Any) = false
 
 function install_eval_hook!()
     EVAL_HOOKED[] && return true

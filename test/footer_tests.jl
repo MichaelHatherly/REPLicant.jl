@@ -244,9 +244,19 @@ end
 
     # Code run at the prompt owns the screen until it returns: `less` or `vim` on the
     # alternate screen would be drawn over. The paint waits, then claims the region.
-    @test F.prompt_evaluating((; in_eval = true))
-    @test !F.prompt_evaluating((; in_eval = false))
+    running = Channel{Any}(1)
+    @test F.prompt_evaluating((; in_eval = true, repl_channel = running))
+    @test !F.prompt_evaluating((; in_eval = false, repl_channel = running))
     @test !F.prompt_evaluating(nothing)
+
+    # An eval that throws leaves `in_eval` set, but the backend has gone back to
+    # waiting for the next input, so the prompt is idle again.
+    idle = Channel{Any}(1)
+    waiter = @async take!(idle)
+    yield()
+    @test !F.prompt_evaluating((; in_eval = true, repl_channel = idle))
+    put!(idle, nothing)
+    wait(waiter)
 
     footer, buf = harness(24, 80)
     F.set!(:a, "one", footer)
