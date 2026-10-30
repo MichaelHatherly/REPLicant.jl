@@ -99,6 +99,20 @@ end
     end
 end
 
+@testitem "label_cleared_beside_unlabeled_server" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    Utilities.withproject() do start, registry
+        labeled, port = start()
+        REPLicant.label!(labeled, "tests")
+        start()
+        # An empty label clears the name; unlabeled servers do not hold "".
+        @test REPLicant.label!(labeled, "") == ""
+        @test !contains(read(joinpath(registry, string(port)), String), "name=")
+    end
+end
+
 @testitem "label_rejects_newline" setup = [Utilities] tags = [:server_lifecycle] begin
     import REPLicant
 

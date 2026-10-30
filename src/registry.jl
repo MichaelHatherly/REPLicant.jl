@@ -205,7 +205,7 @@ end
 Label a REPLicant server so clients can select it with `--name`. Without a handle
 it labels the server running in this process, the saved one when there is one.
 Run it at the REPL, or send `REPLicant.label!("name")` over the eval channel so an
-agent labels a server it reaches by `--port`.
+agent labels a server it reaches by `--port`. An empty `name` clears the label.
 
 Errors when no server is running in this session, when `name` contains a newline,
 or when another live server in the same project already holds `name`.
@@ -223,7 +223,8 @@ function label!(srv::Server, name::AbstractString)
     port = srv.port::Int
     project = srv.project::String
     started = srv.started::Dates.DateTime
-    conflict = _label_conflict(project, name, port)
+    # An empty name clears the label, and no server holds it.
+    conflict = isempty(name) ? nothing : _label_conflict(project, name, port)
     isnothing(conflict) || error(
         "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
     )
