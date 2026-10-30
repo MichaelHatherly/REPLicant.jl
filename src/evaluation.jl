@@ -100,30 +100,6 @@ function _install_routing!()
     return nothing
 end
 
-# The running servers that share this process's routing. Only the last one to stop
-# uninstalls it, so a server closing does not take routing from the others, as when
-# a warm session's test suite starts and closes servers of its own.
-const ROUTING_SERVERS = Base.IdSet{Server}()
-const ROUTING_LOCK = ReentrantLock()
-
-function _acquire_routing!(srv::Server)
-    Base.@lock ROUTING_LOCK begin
-        push!(ROUTING_SERVERS, srv)
-        _install_routing!()
-    end
-    return nothing
-end
-
-# Idempotent per server: shutdown runs from both the serve loop and `atexit`.
-function _release_routing!(srv::Server)
-    Base.@lock ROUTING_LOCK begin
-        srv in ROUTING_SERVERS || return nothing
-        delete!(ROUTING_SERVERS, srv)
-        isempty(ROUTING_SERVERS) && _uninstall_routing!()
-    end
-    return nothing
-end
-
 # `redirect_stdout`/`redirect_stderr` dup the new stream's fd onto fd 1/2. Inside a
 # capture those fds belong to the capture, so hand them back to it.
 function _keep_capture_fds()

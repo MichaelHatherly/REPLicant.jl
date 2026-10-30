@@ -111,11 +111,11 @@ end
         @test timedwait(() -> !isnothing(server.busy_since), 10.0) === :ok
         close(server)
         sleep(0.5)
-        @test server in REPLicant.ROUTING_SERVERS
+        @test haskey(REPLicant.SERVERS, server)
         @test timedwait(() -> istaskdone(running), 10.0) === :ok
         @test contains(fetch(running), "after interrupt")
         @test timedwait(() -> istaskdone(server.task), 10.0) === :ok
-        @test !(server in REPLicant.ROUTING_SERVERS)
+        @test !haskey(REPLicant.SERVERS, server)
     end
 end
 

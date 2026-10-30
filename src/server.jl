@@ -205,9 +205,6 @@ end
 
 function _server(srv::Server)
     server, port_number, entry_path = _listen_and_register!(srv)
-    # Route output per eval so a remote eval's output is captured while the
-    # interactive REPL's still reaches the terminal.
-    _acquire_routing!(srv)
     # Capture human-typed activity into the log (a no-op without an interactive REPL).
     _install_activity_capture()
     # Signal readiness now that the registry entry exists.
@@ -238,26 +235,42 @@ function _listen_and_register!(srv::Server)
     srv.started = started
     srv.verbose && @info "REPLicant listening" port_number project entry_path
 
-    Base.@lock RUNNING_LOCK begin
-        RUNNING_SERVERS[srv] = (server, entry_path)
+    Base.@lock SERVERS_LOCK begin
+        SERVERS[srv] = (server, entry_path)
+        # Route output per eval so a remote eval's output is captured while the
+        # interactive REPL's still reaches the terminal.
+        _install_routing!()
         EXIT_HOOKED[] || (atexit(_exit_cleanup); EXIT_HOOKED[] = true)
     end
 
     return server, port_number, entry_path
 end
 
-# The servers still running in this process, with the listener and registry entry
-# exit has to clean up for each. One exit hook serves them all, and a server leaves
-# on shutdown, so a closed server's old port is never unregistered at exit.
-const RUNNING_SERVERS = IdDict{Server, Tuple{Sockets.TCPServer, String}}()
-const RUNNING_LOCK = ReentrantLock()
+# This process's servers, from listening until their worker finishes. The value is
+# the listener and registry entry while registered, `nothing` after, so exit never
+# unregisters a closed server's old port. Routing stays installed while any remain,
+# since an eval still running when its server closes is capturing through it.
+const SERVERS = IdDict{Server, Union{Tuple{Sockets.TCPServer, String}, Nothing}}()
+const SERVERS_LOCK = ReentrantLock()
 const EXIT_HOOKED = Ref(false)
 
-# Clean up after every running server as the process exits. A restart keeps the
+# Leave the table once the worker has finished, uninstalling routing after the last
+# server. Idempotent per server: shutdown runs from both the serve loop and `atexit`.
+function _release_routing!(srv::Server)
+    Base.@lock SERVERS_LOCK begin
+        haskey(SERVERS, srv) || return nothing
+        delete!(SERVERS, srv)
+        isempty(SERVERS) && _uninstall_routing!()
+    end
+    return nothing
+end
+
+# Clean up after every registered server as the process exits. A restart keeps the
 # listener open: closing it ends the server task, and a script blocked on that task
 # would return and exit the process before the re-exec.
 function _exit_cleanup()
-    for (srv, (listener, entry_path)) in Base.@lock(RUNNING_LOCK, collect(RUNNING_SERVERS))
+    registered = Base.@lock SERVERS_LOCK [srv => reg for (srv, reg) in SERVERS if reg !== nothing]
+    for (srv, (listener, entry_path)) in registered
         try
             RESTARTING[] ? _unregister!(srv, entry_path) :
                 _shutdown_server(listener, srv, entry_path)
@@ -343,7 +356,7 @@ end
 # Stop taking connections and leave the registry. Routing stays, since an eval still
 # running when the server closes is capturing through it.
 function _close_and_unregister!(listener, srv::Server, entry_path)
-    Base.@lock RUNNING_LOCK delete!(RUNNING_SERVERS, srv)
+    Base.@lock SERVERS_LOCK haskey(SERVERS, srv) && (SERVERS[srv] = nothing)
     close(listener)
     return _unregister!(srv, entry_path)
 end

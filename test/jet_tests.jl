@@ -70,7 +70,7 @@
         # adds keyword `getfield`s to `_read_header`, `_read_body`, and the chunked
         # `_discard_body`, plus `TruncatedFrame`'s field `convert`s. The rest are in
         # the same categories: `CaptureSink`'s outer field, the single exit hook over
-        # `RUNNING_SERVERS`, the footer's `visible`/`max_rows`/`prompt_evaluating` over
+        # `SERVERS`, the footer's `visible`/`max_rows`/`prompt_evaluating` over
         # `Any` widths and the REPL backend, and keyword `getfield`s on `_cap`,
         # `_kill_target`, and `repaint!`.
         SOUND_LIMIT = 746   # JET.report_package(REPLicant; mode = :sound)

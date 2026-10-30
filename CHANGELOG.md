@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Keep a server process's running servers in one table. Exit cleanup and output routing each kept their own set under their own lock, so the two could drift apart. No behaviour change [#84]
 - Reject `--module Main`: the default session is addressed by omitting `--module`, so a session named `Main` would be a distinct module shadowing that name. Eval and `reset` both error with that guidance instead of handing back a decoy [#42]
 - Run each eval in the caller's working directory: the client sends its directory with the request, so relative paths resolve where `julia +rpc` was invoked rather than where the server started, and a `cd` inside an eval no longer leaks to the next. Override with `--dir <path>` [#41]
 - Refuse to evaluate when no server owns the caller's directory and no explicit selector is given, listing the candidates instead of silently running against another project's server. Target a foreign server on purpose with `--port`, `--project`, or `--name` [#41][#42]
