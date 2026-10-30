@@ -238,6 +238,32 @@ end
     @test written(buf) == "\e7\e[24;1Hone\e[0m\e[K\e8"
 end
 
+@testitem "footer_writes_under_its_lock" tags = [:footer] setup = [FooterHarness] begin
+    F = FooterHarness.F
+
+    # A repaint written after `disable!` released the region would claim it again,
+    # so every write holds the lock `disable!` takes.
+    mutable struct LockProbe <: IO
+        footer::Any
+        held::Vector{Bool}
+    end
+    function Base.unsafe_write(probe::LockProbe, ::Ptr{UInt8}, n::UInt)
+        push!(probe.held, islocked(probe.footer.lock))
+        return n
+    end
+    Base.displaysize(::LockProbe) = (24, 80)
+
+    probe = LockProbe(nothing, Bool[])
+    footer = F.Footer(probe)
+    probe.footer = footer
+    footer.enabled = true
+    F.set!(:a, "one", footer)
+    F.repaint!(footer)
+    F.disable!(footer)
+    @test length(probe.held) == 2
+    @test all(probe.held)
+end
+
 @testitem "footer_repaint_across_a_resize" tags = [:footer] setup = [FooterHarness] begin
     F = FooterHarness.F
     harness, resize, written = FooterHarness.harness, FooterHarness.resize, FooterHarness.written

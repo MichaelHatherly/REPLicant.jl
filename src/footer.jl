@@ -474,7 +474,9 @@ function repaint!(footer::Footer)
     # block `set!` and every other caller behind it.
     lines = footer_lines(sections, height, width)
 
-    bytes = Base.@lock footer.lock begin
+    # Written under the lock, so a `disable!` cannot hand the region back between
+    # this repaint's check and its write.
+    Base.@lock footer.lock begin
         footer.enabled || return nothing
         n = min(length(lines), max(height - 1, 0))
         # A resize resets DECSTBM, so the region has to be claimed again.
@@ -489,9 +491,8 @@ function repaint!(footer::Footer)
         )
         footer.painted = Painted(n, height, width, [min(display_width(line), width) for line in lines[1:n]])
         footer.stale = false
-        painted
+        isempty(painted) || write(footer.io, painted)
     end
-    isempty(bytes) || write(footer.io, bytes)
     return nothing
 end
 
@@ -732,21 +733,17 @@ end
 Give the reserved rows back to the scrolling region and stop painting.
 """
 function disable!(footer::Footer = FOOTER)
-    bytes = Base.@lock footer.lock begin
-        if footer.enabled
-            footer.enabled = false
-            height, width = displaysize(footer.io)
-            seq = paint(footer.painted.rows, String[], height, width; force_region = true)
-            footer.painted = Painted()
-            footer.stale = false
-            seq
-        else
-            ""
-        end
+    Base.@lock footer.lock begin
+        footer.enabled || return nothing
+        footer.enabled = false
+        height, width = displaysize(footer.io)
+        seq = paint(footer.painted.rows, String[], height, width; force_region = true)
+        footer.painted = Painted()
+        footer.stale = false
+        # Written here rather than left to the dispatch task, which idles from the
+        # moment the footer is disabled and would never pick this up.
+        isempty(seq) || write(footer.io, seq)
     end
-    # Written here rather than left to the dispatch task, which idles from the
-    # moment the footer is disabled and would never pick this up.
-    isempty(bytes) || write(footer.io, bytes)
     return nothing
 end
 
