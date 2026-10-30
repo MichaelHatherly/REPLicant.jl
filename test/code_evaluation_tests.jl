@@ -131,6 +131,58 @@ end
     @test contains(result.output, "viac")
 end
 
+@testitem "eval_c_write_past_pipe_buffer_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    # A pipe holds 64 KB; a C write larger than that must not be cut short.
+    code = """
+    buf = fill(UInt8('x'), 200_000)
+    ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), 1, buf, length(buf))
+    """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test count(==('x'), result.output) == 200_000
+    @test endswith(strip(result.output), "200000")
+end
+
+@testitem "eval_subprocess_output_past_pipe_buffer_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    code = raw"""
+    run(`sh -c 'head -c 300000 /dev/zero | tr "\0" y; echo " rc=$?" >&2'`);
+    """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test count(==('y'), result.output) == 300_000
+    @test contains(result.output, " rc=0")
+end
+
+@testitem "eval_keeps_fds_blocking" tags = [:code_evaluation] begin
+    mod = Module()
+    # Children inherit fd 1/2 with their flags. Non-blocking, a child's write fails
+    # with EAGAIN whenever the sink is momentarily full, and its output is lost.
+    code = """
+    F_GETFL = 3
+    O_NONBLOCK = Sys.isapple() ? 0x0004 : 0x0800
+    flags(fd) = @ccall fcntl(fd::Cint, F_GETFL::Cint)::Cint
+    (flags(1) & O_NONBLOCK, flags(2) & O_NONBLOCK)
+    """
+    if Sys.iswindows()
+        @test true skip = true
+    else
+        result = REPLicant._evaluate(code, 1, mod, "")
+        @test strip(result.output) == "(0, 0)"
+    end
+end
+
+@testitem "eval_large_c_write_interleaves_with_println" tags = [:code_evaluation] begin
+    mod = Module()
+    code = """
+    println("a")
+    buf = fill(UInt8('x'), 100_000)
+    ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), 1, buf, length(buf))
+    println("\\nc");
+    """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test split(strip(result.output), '\n') == ["a", "x"^100_000, "c"]
+end
+
 @testitem "eval_subprocess_interleaves_with_println" tags = [:code_evaluation] begin
     mod = Module()
     # Julia-level writes and raw-fd subprocess writes share one pipe, so they land

@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Capture eval output past 64 KB written to fd 1/2. The eval's output went through a pipe whose write end libuv keeps non-blocking, a flag the redirected fds and every child process share, so a C library or subprocess writing more than the pipe held got EAGAIN: a 200 KB C `write` stopped at 64 KB, and a subprocess could lose all of its output while `run` still reported success. The output now goes to a temporary file, which neither fails that way nor waits on a reader, and Julia, C and subprocess output stay in write order [#80]
 - Keep `REPLicant.label!`, `REPLicant.server()` and the footer on the session's own server. Every `Server` constructor overwrote the process's current server, so after a warm test run `label!("main")` labeled a closed test server or failed, and `server()` returned `nothing`. An unsaved server no longer displaces a running `save = true` server, so the session's own server stays put. Add `label!(server, name)` to label a server by its handle [#79]
 - Hide the value of an eval whose code ends in `;`, as the REPL does. `julia +rpc -e 'y = 1;'` printed `1`. Printed output still comes through, and a `;` inside a string or followed by a comment is read the way the REPL reads it [#76]
 - Keep the footer on the server it was enabled for. It read the process's current server, which every `Server` constructor overwrites, so running the test suite in a warm session showed each test's server in the row and then "no server" once that server closed [#75]
@@ -155,3 +156,4 @@ Initial Public Release
 [#75]: https://github.com/MichaelHatherly/REPLicant.jl/issues/75
 [#76]: https://github.com/MichaelHatherly/REPLicant.jl/issues/76
 [#79]: https://github.com/MichaelHatherly/REPLicant.jl/issues/79
+[#80]: https://github.com/MichaelHatherly/REPLicant.jl/issues/80

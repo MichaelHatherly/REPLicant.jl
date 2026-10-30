@@ -2,25 +2,24 @@
 # Output capture.
 #
 # Output is routed per task rather than redirected process-wide. A remote eval
-# binds `CAPTURE_TARGET` to its own pipe for the eval's dynamic extent; the
-# routing IO and display steer Julia-level writes to that pipe when bound and
+# binds `CAPTURE_TARGET` to its own output file for the eval's dynamic extent; the
+# routing IO and display steer Julia-level writes to that file when bound and
 # to the real streams otherwise. The eval also redirects the raw fds 1/2 to the
-# same pipe, so subprocess and C-library output is captured too. The interactive
+# same file, so subprocess and C-library output is captured too. The interactive
 # REPL's output, running with no binding, reaches the terminal even while an eval
 # is in flight.
 
 # The process's real streams, captured when routing is installed. These TTYs write
 # to the terminal through their own libuv handles, independent of fd 1/2. Idle,
-# their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its pipe and
+# their fds back fd 1/2; during an eval `_capture` redirects fd 1/2 to its file and
 # restores these afterward. The routers steer Julia-level writes to them when no
 # capture target is bound.
 const REAL_OUT = Ref{IO}()
 const REAL_ERR = Ref{IO}()
 
 # The current eval's capture target, or `nothing` when no eval is active. Bound by
-# `with(CAPTURE_TARGET => pipe.in)` and, on 1.11+, inherited by child tasks the
-# eval spawns. `_capture` binds the pipe's write end, a `LibuvStream` whose `write`
-# locks internally, so concurrent writes from inherited tasks stay safe.
+# `with(CAPTURE_TARGET => sink)` and, on 1.11+, inherited by child tasks the eval
+# spawns.
 const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
 # Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
@@ -39,7 +38,7 @@ Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
-# captured into its own pipe, so it never tees here.
+# captured into its own file, so it never tees here.
 function Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt)
     CAPTURE_TARGET[] === nothing && _tee_human(p, n)
     return unsafe_write(_routed(r), p, n)
@@ -95,6 +94,25 @@ function _uninstall_routing!()
     return nothing
 end
 
+# The eval's capture target: its output file, flushed on every write so Julia-level
+# output reaches the fd before any later raw fd 1/2 write and the two stay in order.
+# `IOStream` writes lock internally, so concurrent writes from inherited tasks stay
+# safe.
+struct CaptureSink <: IO
+    file::IOStream
+end
+function Base.unsafe_write(s::CaptureSink, p::Ptr{UInt8}, n::UInt)
+    written = unsafe_write(s.file, p, n)
+    flush(s.file)
+    return written
+end
+function Base.write(s::CaptureSink, b::UInt8)
+    written = write(s.file, b)
+    flush(s.file)
+    return written
+end
+Base.flush(s::CaptureSink) = flush(s.file)
+
 # `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
 # wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
 # to the stream underneath. The routers still write to the full `IOContext`, so
@@ -106,66 +124,67 @@ _fd_stream(io::Base.IOContext) = _fd_stream(io.io)
 # value (or the thrown exception and its backtrace). InterruptException is rethrown
 # so long-running code stays interruptible.
 #
-# A single pipe sinks every strand of the eval's output in write order: the
-# routers and the display steer Julia-level writes there via `CAPTURE_TARGET`, the
-# logger writes its records there, and fd 1/2 are redirected to it so subprocess
-# and C-library output land there too. fd 1 is process-global, so a subprocess
-# launched at the REPL prompt during an eval is captured into that eval; the worker
-# is sequential, so this is rare and accepted.
+# A single temporary file sinks every strand of the eval's output in write order:
+# the routers and the display steer Julia-level writes there via `CAPTURE_TARGET`,
+# the logger writes its records there, and fd 1/2 are redirected to it so
+# subprocess and C-library output land there too. A pipe would hold only 64 KB: its
+# write end must be non-blocking for libuv, a flag fd 1/2 and child processes share
+# through the dup, so a larger raw write failed with EAGAIN and lost the output. A
+# file write neither fails that way nor waits on a reader. fd 1 is process-global,
+# so a subprocess launched at the REPL prompt during an eval is captured into that
+# eval; the worker is sequential, so this is rare and accepted.
 function _capture(f)
     # Capture routes through the installed streams. The server installs them at
     # start; install here too so a direct `_capture` (e.g. a test) still routes.
     _install_routing!()
 
-    pipe = Pipe()
-    Base.link_pipe!(pipe; reader_supports_async = true, writer_supports_async = true)
-    # Redirect only the raw fds, not the global `stdout`/`stderr` bindings: those
-    # stay the routers. `_redirect_io_libc` is the primitive `redirect_stdout`
-    # calls; it dups the fd portably (Windows `SetStdHandle` handled internally).
-    Base._redirect_io_libc(pipe.in, 1)
-    Base._redirect_io_libc(pipe.in, 2)
-    logger = Logging.ConsoleLogger(pipe.in)
+    path, file = mktemp()
+    try
+        sink = CaptureSink(file)
+        # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
+        # those stay the routers. `_redirect_io_libc` is the primitive
+        # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle`
+        # handled internally).
+        Base._redirect_io_libc(file, 1)
+        Base._redirect_io_libc(file, 2)
+        logger = Logging.ConsoleLogger(sink)
 
-    # Spawning the reader task draws from the task RNG; copy and restore it so
-    # user code sees an unperturbed random stream.
-    old_rng = copy(Random.default_rng())
-    buffer = IOBuffer()
-    reader = @async write(buffer, pipe)
-    copy!(Random.default_rng(), old_rng)
-
-    value, errored, backtrace = with(CAPTURE_TARGET => pipe.in) do
-        Logging.with_logger(logger) do
-            try
-                yield()  # let the reader task start draining the pipe
-                f(), false, Vector{Ptr{Cvoid}}()
-            catch err
-                err isa InterruptException && rethrow()
-                # `include_string` wraps an interrupt thrown in user code as a
-                # `LoadError`. Report it to the client like any error, but with no
-                # backtrace: the exception was delivered asynchronously at an
-                # arbitrary point, and walking that stack under threads deadlocks in
-                # the runtime's stack lookup.
-                interrupted = err isa LoadError && err.error isa InterruptException
-                err, true, (interrupted ? Ptr{Cvoid}[] : catch_backtrace())
-            finally
-                # Drain libc's own stdio buffers into the pipe before restoring
-                # the fds, so fully-buffered C output (e.g. `puts`) is captured
-                # rather than flushed to the terminal at process exit.
-                Base.Libc.flush_cstdio()
-                Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
-                Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
-                close(pipe.in)
-                wait(reader)
+        value, errored, backtrace = with(CAPTURE_TARGET => sink) do
+            Logging.with_logger(logger) do
+                try
+                    f(), false, Vector{Ptr{Cvoid}}()
+                catch err
+                    err isa InterruptException && rethrow()
+                    # `include_string` wraps an interrupt thrown in user code as a
+                    # `LoadError`. Report it to the client like any error, but with
+                    # no backtrace: the exception was delivered asynchronously at an
+                    # arbitrary point, and walking that stack under threads
+                    # deadlocks in the runtime's stack lookup.
+                    interrupted = err isa LoadError && err.error isa InterruptException
+                    err, true, (interrupted ? Ptr{Cvoid}[] : catch_backtrace())
+                finally
+                    # Drain libc's own stdio buffers into the file before restoring
+                    # the fds, so fully-buffered C output (e.g. `puts`) is captured
+                    # rather than flushed to the terminal at process exit.
+                    Base.Libc.flush_cstdio()
+                    Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
+                    Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
+                end
             end
         end
-    end
 
-    return (
-        output = String(take!(buffer)),
-        value = value,
-        error = errored,
-        backtrace = backtrace,
-    )
+        flush(file)
+        seekstart(file)
+        return (
+            output = read(file, String),
+            value = value,
+            error = errored,
+            backtrace = backtrace,
+        )
+    finally
+        close(file)
+        rm(path; force = true)
+    end
 end
 
 #
