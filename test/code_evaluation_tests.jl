@@ -165,6 +165,22 @@ end
     @test contains(outer.output, "after-inner")
 end
 
+@testitem "task_outliving_eval_writes_to_enclosing_capture" tags = [:code_evaluation] begin
+    # A task inherits the eval's capture (1.11+) and may print after the eval ends,
+    # when that capture is closed. Its output goes where the eval's own would go now.
+    @static if VERSION >= v"1.11"
+        mod = Module()
+        outer = REPLicant._capture() do
+            code = "t = @async (sleep(0.2); println(\"late\"); @info \"late log\"); nothing"
+            REPLicant._evaluate(code, 1, mod, "")
+            wait(Base.invokelatest(getproperty, mod, :t))
+        end
+        @test !outer.error
+        @test contains(outer.output, "late")
+        @test contains(outer.output, "late log")
+    end
+end
+
 @testitem "router_redirect_stream_stays_real_during_capture" tags = [:code_evaluation] begin
     # `redirect_stdout(router)` makes `pipe_writer`'s stream the runtime's own
     # stdout, and a server closing mid-eval reinstalls routing inside a capture. Were

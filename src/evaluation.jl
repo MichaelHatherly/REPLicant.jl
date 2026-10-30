@@ -22,6 +22,16 @@ const REAL_ERR = Ref{IO}()
 # spawns.
 const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
+# The open capture a write lands in. A task that outlives its eval still holds the
+# eval's closed sink, where writes vanish, so it falls through to the enclosing one.
+function _capture_target()
+    target = CAPTURE_TARGET[]
+    while target isa CaptureSink && !isopen(target)
+        target = target.outer
+    end
+    return target
+end
+
 # Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
 # real stream from `real` (`REAL_OUT` for stdout, `REAL_ERR` for stderr).
 # `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged;
@@ -33,18 +43,18 @@ const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 struct Router <: Base.AbstractPipe
     real::Base.RefValue{IO}
 end
-_routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
+_routed(r::Router) = something(_capture_target(), r.real[])
 Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
 # captured into its own file, so it never tees here.
 function Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt)
-    CAPTURE_TARGET[] === nothing && _tee_human(p, n)
+    _capture_target() === nothing && _tee_human(p, n)
     return unsafe_write(_routed(r), p, n)
 end
 function Base.write(r::Router, b::UInt8)
-    CAPTURE_TARGET[] === nothing && _tee_human(b)
+    _capture_target() === nothing && _tee_human(b)
     return write(_routed(r), b)
 end
 Base.flush(r::Router) = flush(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
@@ -57,7 +67,7 @@ Base.displaysize(r::Router) = displaysize(_routed(r))  # dendro-ignore: duplicat
 struct RouterDisplay <: Base.AbstractDisplay end
 
 function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
-    target = CAPTURE_TARGET[]
+    target = _capture_target()
     if target === nothing
         # No eval bound: the REPL is displaying a human result. Tee it into the open
         # activity entry, then decline so the REPL's own display still shows it.
@@ -114,7 +124,7 @@ end
 # `redirect_stdout`/`redirect_stderr` dup the new stream's fd onto fd 1/2. Inside a
 # capture those fds belong to the capture, so hand them back to it.
 function _keep_capture_fds()
-    target = CAPTURE_TARGET[]
+    target = _capture_target()
     target isa CaptureSink || return nothing
     return _point_fds(target.file)
 end
@@ -147,7 +157,8 @@ end
 # safe.
 struct CaptureSink <: IO
     file::IOStream
-    CaptureSink(file::IOStream) = new(file)
+    # The capture this one is nested in, which takes over once this one closes.
+    outer::Union{IO, Nothing}
 end
 function Base.unsafe_write(s::CaptureSink, p::Ptr{UInt8}, n::UInt)
     written = unsafe_write(s.file, p, n)
@@ -242,8 +253,8 @@ function _capture(f)
 
     file = _capture_file()
     try
-        sink = CaptureSink(file)
-        outer = CAPTURE_TARGET[]
+        outer = _capture_target()
+        sink = CaptureSink(file, outer)
         # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
         # those stay the routers.
         _point_fds(file)
