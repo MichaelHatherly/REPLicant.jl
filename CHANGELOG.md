@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Stop each `julia +rpc` call compiling libuv's socket callbacks on Julia 1.10 and 1.11. The precompile workload runs them, but before Julia 1.12 the package image left them out, so every client compiled the connect callback and the socket finalizer again, about 15ms per call on 1.11. The image now carries them as explicit precompile directives [#88]
 - Compile what a server and client run on their first request into the package image. A server used to compile around 90 methods at runtime, mostly on its first eval, and the client recompiled its `_send` path for each combination of `--timeout`, `--head-lines`, and `--tail-lines`. The precompile workload now starts a real server and runs every client command against it, and the REPL, Revise, and Test extensions rerun it, since their methods invalidate the package code that calls the hooks they extend. The client wraps its output streams in one concrete type, so a terminal, a pipe, and a file share the same compiled code on every platform. A first eval now costs the same as later ones in a headless server and about 0.02s more with Revise, REPL, and Test loaded [#87]
 - Keep a server process's running servers in one table. Exit cleanup and output routing each kept their own set under their own lock, so the two could drift apart. The activity log and the footer's repaint state move out of module globals into the `ActivityLog` and `Footer` structs. No behaviour change [#84]
 - Reject `--module Main`: the default session is addressed by omitting `--module`, so a session named `Main` would be a distinct module shadowing that name. Eval and `reset` both error with that guidance instead of handing back a decoy [#42]
@@ -191,3 +192,4 @@ Initial Public Release
 [#84]: https://github.com/MichaelHatherly/REPLicant.jl/issues/84
 [#85]: https://github.com/MichaelHatherly/REPLicant.jl/issues/85
 [#87]: https://github.com/MichaelHatherly/REPLicant.jl/issues/87
+[#88]: https://github.com/MichaelHatherly/REPLicant.jl/issues/88

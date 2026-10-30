@@ -146,3 +146,12 @@ function _run_workload()
 end
 
 PrecompileTools.@compile_workload _run_workload()
+
+# libuv calls these on every connection, and before Julia 1.12 the workload's
+# inference capture misses them, so each process would compile them on first use.
+@static if VERSION < v"1.12"
+    precompile(Sockets.uv_connectcb, (Ptr{Cvoid}, Cint))
+    precompile(Sockets.uv_connectioncb, (Ptr{Cvoid}, Cint))
+    precompile(Base.uvfinalize, (Sockets.TCPSocket,))
+    precompile(Base.uvfinalize, (Sockets.TCPServer,))
+end

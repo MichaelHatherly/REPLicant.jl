@@ -13,11 +13,12 @@
         return `$exec --startup-file=no --project=$(pkgdir(REPLicant))`
     end
 
-    # The methods a process compiled at runtime that REPLicant owns or specializes on.
-    # A process that compiled nothing leaves no trace file.
+    # The methods a process compiled at runtime that REPLicant owns or specializes on,
+    # and the socket callbacks libuv calls on its connections. A process that compiled
+    # nothing leaves no trace file.
     function owned_compiles(trace)
         isfile(trace) || return String[]
-        return filter(line -> contains(line, "REPLicant"), readlines(trace))
+        return filter(line -> contains(line, "REPLicant") || contains(line, "Sockets"), readlines(trace))
     end
 
     # Start a server the way `julia +rpc start` does, after running `preamble` (which
