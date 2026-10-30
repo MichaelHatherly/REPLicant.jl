@@ -66,6 +66,43 @@ end
     @test contains(result.output, "StackOverflowError")
 end
 
+@testitem "show_failure_reported_like_repl" tags = [:error_handling] begin
+    mod = Module()
+    # A value whose `show` throws is reported the way the REPL reports it, through
+    # `showerror`, with the user's own frames.
+    code = """
+    struct Boom end
+    Base.show(io::IO, ::MIME"text/plain", ::Boom) = error("boom")
+    Boom()
+    """
+    result = REPLicant._evaluate(code, 1, mod, "")
+    @test result.errored
+    @test startswith(result.output, "Error showing value of type Boom:\nERROR: boom\n")
+    @test contains(result.output, "REPL[1]:2")
+    @test !contains(result.output, "_show_object")
+end
+
+@testitem "showerror_failure_reported_through_showerror" tags = [:error_handling] begin
+    import Logging
+    import Test
+    mod = Module()
+    # An exception whose own `showerror` throws leaves only the formatting
+    # fallback, which still reports through `showerror` and logs the failure.
+    code = """
+    struct BadErr <: Exception end
+    Base.showerror(io::IO, ::BadErr) = error("bad showerror")
+    throw(BadErr())
+    """
+    logger = Test.TestLogger()
+    result = Logging.with_logger(logger) do
+        REPLicant._evaluate(code, 1, mod, "")
+    end
+    @test any(r -> r.message == "Error evaluating code", logger.logs)
+    @test result.errored
+    @test startswith(result.output, "ERROR: bad showerror")
+    @test !contains(result.output, "ErrorException(")
+end
+
 @testitem "interrupt_is_rethrown_from_capture" tags = [:error_handling] begin
     import REPLicant
     # `_capture` rethrows InterruptException so long-running code stays

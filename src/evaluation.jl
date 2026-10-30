@@ -225,20 +225,20 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
             println(buffer, rstrip(result.output))
         end
 
-        if result.error
+        errored = result.error
+        if errored
             _error_message(buffer, result, id)
-        else
-            _echo_object(result.value) && !_ends_with_semicolon(code) &&
-                _show_object(buffer, result, mod)
+        elseif _echo_object(result.value) && !_ends_with_semicolon(code)
+            errored = !_show_value(buffer, result, mod)
         end
 
-        return (; output = String(take!(buffer)), errored = result.error)
+        return (; output = String(take!(buffer)), errored)
     catch error
-        # Guards failures in the result-formatting path (`_error_message`,
-        # `_show_object`, `take!`). Evaluation errors are caught inside `_capture`
-        # and reported through `result.error`.
+        # Guards failures in the result-formatting path (`_error_message`, `take!`).
+        # Evaluation errors are caught inside `_capture` and reported through
+        # `result.error`; a failing `show` is reported by `_show_value`.
         @error "Error evaluating code" id code error
-        return (; output = "ERROR: $(error)", errored = true)
+        return (; output = "ERROR: " * sprint(showerror, error), errored = true)
     end
 end
 
@@ -320,6 +320,26 @@ function _show_object(buffer, result, mod)
     # invokelatest: the value's type may have been defined during this same
     # request, after the worker's world age was fixed.
     return Base.invokelatest(show, ctx, "text/plain", result.value)
+end
+
+# Show the value into `buffer`, returning whether it showed. A `show` that throws is
+# reported the way the REPL reports it, with its backtrace cut above `_show_object`
+# so only the frames of the failing `show` remain.
+function _show_value(buffer, result, mod)
+    shown = IOBuffer()
+    try
+        _show_object(shown, result, mod)
+    catch err
+        bt = Base.scrub_repl_backtrace(catch_backtrace())
+        cut = findfirst(x -> x.func === :_show_object, bt)
+        isnothing(cut) || (bt = bt[1:(cut - 1)])
+        println(IOContext(buffer, :module => mod), "Error showing value of type ", typeof(result.value), ":")
+        print(buffer, "ERROR: ")
+        Base.invokelatest(showerror, buffer, err, bt)
+        return false
+    end
+    write(buffer, take!(shown))
+    return true
 end
 
 function _error_message(buffer, result, id)
