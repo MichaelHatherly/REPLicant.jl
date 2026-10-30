@@ -48,13 +48,15 @@ Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
-# captured into its own file, so it never tees here.
+# captured into its own file, so it never tees here. Tested on the raw binding: a
+# task left over from an agent eval still holds its closed sink and is no human's.
+_human_output() = CAPTURE_TARGET[] === nothing
 function Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt)
-    _capture_target() === nothing && _tee_human(p, n)
+    _human_output() && _tee_human(p, n)
     return unsafe_write(_routed(r), p, n)
 end
 function Base.write(r::Router, b::UInt8)
-    _capture_target() === nothing && _tee_human(b)
+    _human_output() && _tee_human(b)
     return write(_routed(r), b)
 end
 Base.flush(r::Router) = flush(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
@@ -71,7 +73,7 @@ function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
     if target === nothing
         # No eval bound: the REPL is displaying a human result. Tee it into the open
         # activity entry, then decline so the REPL's own display still shows it.
-        _tee_human_display(x)
+        _human_output() && _tee_human_display(x)
         throw(MethodError(display, (d, M, x)))
     end
     # Limited like the REPL's own display, so a large array is elided.

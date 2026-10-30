@@ -186,6 +186,26 @@ end
     end
 end
 
+@testitem "activity_skips_output_of_agent_leftover_task" tags = [:activity] setup = [Utilities] begin
+    import REPLicant
+
+    # A task an agent eval spawned keeps printing after the eval returns. That is
+    # the agent's output, not the human's, so it stays out of the human's entry.
+    @static if VERSION >= v"1.11"
+        Utilities.reset_activity()
+        router = REPLicant.Router(Ref{IO}(IOBuffer()))
+        mod = Module()
+        Core.eval(mod, :(router = $router))
+        REPLicant._record_repl_input("human typed this")
+        Utilities.outside_capture() do
+            code = "t = @async (sleep(0.2); print(router, \"agent-bg\")); nothing"
+            REPLicant._evaluate(code, 1, mod, "")
+            wait(Base.invokelatest(getproperty, mod, :t))
+        end
+        @test !contains(String(copy(REPLicant.CURRENT_HUMAN_ENTRY[].out)), "agent-bg")
+    end
+end
+
 @testitem "activity_human_output_capped" tags = [:activity] setup = [Utilities] begin
     import REPLicant
 
