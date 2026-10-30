@@ -138,9 +138,9 @@ function _resolve_port(
     return _select_entry(_live_entries(), project, name; err).port
 end
 
-# Resolve a kill target to its registry entry. Unlike eval, this reads the raw
-# registry without pinging, so a wedged server that cannot pong still resolves; an
-# explicit port must name a registered server, since kill needs its pid.
+# Resolve a kill or restart target to its registry entry. Unlike eval, this reads the
+# raw registry without pinging, so a wedged server that cannot pong still resolves; an
+# explicit port must name a registered server, since both need its pid.
 function _kill_target(port::Integer, project::AbstractString, name::AbstractString)
     entries = _read_entries()
     if port > 0
@@ -634,19 +634,26 @@ function _reset_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     isempty(parsed.mod) &&
         error("reset needs --module <name>; the default session cannot be reset")
     target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
-    sock = _open_request(target, REQUEST_RESET, parsed.mod)
-    try
-        frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
-        isnothing(frame) && error("server closed the connection without a response")
-        if frame.type == RESPONSE_ERR
-            println(err, "replicant: $(frame.body)")
-            return 1
-        end
-        println(out, "REPLicant server on port $target: $(frame.body)")
-        return 0
+    frame = _exchange(target, REQUEST_RESET, parsed.mod)
+    if frame.type == RESPONSE_ERR
+        println(err, "replicant: $(frame.body)")
+        return 1
+    end
+    println(out, "REPLicant server on port $target: $(frame.body)")
+    return 0
+end
+
+# Send one request answered off the worker queue and return the reply frame, erroring
+# when the server hangs up without one.
+function _exchange(port::Integer, type::UInt8, body::String)
+    sock = _open_request(port, type, body)
+    frame = try
+        _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
     finally
         close(sock)
     end
+    isnothing(frame) && error("server closed the connection without a response")
+    return frame
 end
 
 # Show recent shared-session activity: what the human typed at the prompt and what an
@@ -664,20 +671,14 @@ function _log_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(rest)
     body = isempty(parsed.since) ? count : "since=$(parsed.since)"
     target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
-    sock = _open_request(target, REQUEST_LOG, body)
-    try
-        frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
-        isnothing(frame) && error("server closed the connection without a response")
-        if frame.type == RESPONSE_ERR
-            println(err, "replicant: $(frame.body)")
-            return 1
-        end
-        print(out, frame.body)
-        endswith(frame.body, '\n') || println(out)
-        return 0
-    finally
-        close(sock)
+    frame = _exchange(target, REQUEST_LOG, body)
+    if frame.type == RESPONSE_ERR
+        println(err, "replicant: $(frame.body)")
+        return 1
     end
+    print(out, frame.body)
+    endswith(frame.body, '\n') || println(out)
+    return 0
 end
 
 # How long `kill` waits for a signalled server to exit before reporting it alive.
@@ -714,13 +715,7 @@ end
 function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     target = _resolve_port(parsed.port, parsed.project, parsed.name)
-    sock = _open_request(target, REQUEST_INTERRUPT, "")
-    frame = try
-        _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
-    finally
-        close(sock)
-    end
-    isnothing(frame) && error("server closed the connection without a response")
+    frame = _exchange(target, REQUEST_INTERRUPT, "")
     body = frame.body
     if frame.type == RESPONSE_ERR
         println(err, "replicant: $body")
@@ -743,6 +738,46 @@ function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = std
     return 1
 end
 
+# How long `restart` waits for the server to register again. A restart loads the
+# session's packages from scratch, recompiling any whose cache went stale.
+const RESTART_SECONDS = 180
+
+# Restart a server in place: it re-execs on its launch argv, keeping its pid and
+# terminal, and registers again on a fresh port. Resolves from the raw registry like
+# `kill`, since the request is answered off the worker queue and reaches a server
+# wedged on an eval. Waits for the new entry, which carries the same pid.
+function _restart_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
+    parsed = _parse_args(args)
+    entry = _kill_target(parsed.port, parsed.project, parsed.name)
+    frame = _exchange(entry.port, REQUEST_RESTART, "")
+    if frame.type == RESPONSE_ERR
+        println(err, "replicant: $(frame.body)")
+        return 1
+    end
+    restarted = _await_restart(entry)
+    println(out, "restarted REPLicant server (pid $(entry.pid)), now on port $(restarted.port)")
+    return 0
+end
+
+# Poll the registry for the restarted server: an entry with the old pid, a new start
+# time, and a socket that answers. Fails fast if the process exits instead.
+function _await_restart(old::RegistryEntry)
+    pid = parse(Int, old.pid)
+    deadline = time() + RESTART_SECONDS
+    while time() < deadline
+        for entry in _read_entries()
+            (entry.pid == old.pid && entry.started != old.started) || continue
+            _ping(entry.port) && return entry
+        end
+        _process_alive(pid) || error("the server process (pid $pid) exited during restart")
+        sleep(0.1)
+    end
+    return error(
+        "the server (pid $pid) did not register again within $(RESTART_SECONDS)s; \
+        its terminal shows why",
+    )
+end
+
 """
     cli(args = ARGS; out = stdout, err = stderr) -> Int
 
@@ -751,7 +786,8 @@ leading `start` launches a detached server (`--dir`/`--project`/`--name`/`--chan
 leading `kill` terminates a resolved server (`--force` for SIGKILL); a leading
 `interrupt` frees a server wedged on a running eval, scheduling an
 `InterruptException` onto it without killing the process (`kill` stays the hard
-tier); a leading `reset` clears a named session (`--module`); a leading `log` prints
+tier); a leading `reset` clears a named session (`--module`); a leading `restart` re-execs a resolved
+server in place, keeping its pid and terminal (macOS and Linux); a leading `log` prints
 recent shared-session activity (`[N]` caps the count, `--since <id>` returns only
 newer entries). Otherwise it resolves
 a target server and forwards code to it, taken from `-e`, from a leading `script.jl`
@@ -774,6 +810,7 @@ Usage:
   julia +rpc kill [selectors] [-f]     stop a server (-f/--force sends SIGKILL)
   julia +rpc interrupt [selectors]     free a server wedged on a running eval
   julia +rpc reset --module <name>     clear a named session
+  julia +rpc restart [selectors]       re-exec a server in place, same pid and terminal
   julia +rpc log [N] [selectors]       show recent session activity (--since <id> for new only)
   julia +rpc help                      show this message
 
@@ -799,7 +836,7 @@ Start options:
 
 _usage(out::IO) = (print(out, USAGE); 0)
 
-# Run a leading subcommand (`ls`/`start`/`kill`/`interrupt`/`reset`/`help`) and
+# Run a leading subcommand (`ls`/`start`/`kill`/`interrupt`/`reset`/`restart`/`log`/`help`) and
 # return its exit code, or `nothing` when `args` does not start with one, so `cli`
 # falls through to evaluation.
 function _run_subcommand(args::Vector{String}, out::IO, err::IO)
@@ -811,6 +848,7 @@ function _run_subcommand(args::Vector{String}, out::IO, err::IO)
     command == "kill" && return _kill_server(rest; out, err)
     command == "interrupt" && return _interrupt_server(rest; out, err)
     command == "reset" && return _reset_server(rest; out, err)
+    command == "restart" && return _restart_server(rest; out, err)
     command == "log" && return _log_server(rest; out, err)
     return nothing
 end

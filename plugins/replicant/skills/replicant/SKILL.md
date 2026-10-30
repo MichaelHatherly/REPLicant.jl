@@ -26,7 +26,7 @@ EOF
   wrappers, output format) and session state across calls.
 - **`references/servers.md`**: listing servers with `julia +rpc ls`, selecting
   by `--name`/`--port`/`--project`, labeling with `label!`, inspecting a saved
-  handle, and starting a server by hand.
+  handle, restarting or stopping a server, and starting one by hand.
 - **`references/setup.md`**: when `julia +rpc` is not installed, is not a known
   channel, or cannot reach a server. Install, link the `rpc` channel, wire
   startup.jl, self-test, troubleshoot.
@@ -42,7 +42,8 @@ Getting the most from a warm session:
 - **Let Revise track your edits.** The recommended startup.jl loads Revise
   (`setup.md`), so editing a package's source updates the running session in
   place: change the code, re-run the call, read the new result. Restart only for a
-  change Revise cannot track, such as redefining a `struct`, or a wedged worker.
+  change Revise cannot track, such as redefining a `struct`, or a wedged worker:
+  `julia +rpc restart` replaces the process in place (`servers.md`).
 - **Explore APIs live instead of guessing.** Evaluate an expression to see its real
   value and type, and use `?name` or `??name` for docs (`evaluate.md`). A warm
   session makes this cheap, so confirm a function's behavior rather than assuming

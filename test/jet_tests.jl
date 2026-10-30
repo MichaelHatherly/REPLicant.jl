@@ -64,7 +64,10 @@
         # `shouldlog` pair. Refusing an unknown session adds a `string` over the
         # `AbstractString` name. Handing a spawned child the router's stream adds a
         # `setup_stdio` call over the abstract real stream and its uncovered match.
-        SOUND_LIMIT = 709   # JET.report_package(REPLicant; mode = :sound)
+        # `restart` adds its subcommand's keyword-NamedTuple `getfield` over
+        # `out`/`err`, and the re-exec's `flush` of the global `stdout`/`stderr` and
+        # its failure `@error`.
+        SOUND_LIMIT = 718   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

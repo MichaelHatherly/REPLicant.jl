@@ -180,6 +180,20 @@ Ctrl-L clears the screen above the footer and leaves the footer alone. Call
 With output piped or redirected there is no terminal to draw on, and it returns
 `false` without drawing.
 
+### Restart a server
+
+```bash
+julia +rpc restart
+```
+
+The server re-execs its own Julia process on the argv it launched with. The pid,
+terminal, environment, and launch directory stay the same. Everything loaded in the
+session is dropped, and `startup.jl` runs again, so the server registers on a new
+port. An interactive REPL comes back as a fresh REPL in the same terminal. A
+restart frees a server wedged on an eval, even one that never yields. It runs the
+process's `atexit` hooks first, as `exit()` does. Restart needs `execv`, so it works
+on macOS and Linux only.
+
 ### Stop a server
 
 ```julia
@@ -229,8 +243,9 @@ REPLicant executes arbitrary code with full system access.
 - Evals run one at a time. When `--timeout` expires, the eval keeps running on
   the server and later evals wait behind it. Free it with `julia +rpc interrupt`.
 - `interrupt` is cooperative. Code that never yields, such as `while true; end`,
-  ignores it, and SIGINT too. Only `julia +rpc kill --force` stops it, and that
-  ends the session.
+  ignores it, and SIGINT too. `julia +rpc restart` replaces the process and keeps
+  its terminal. `julia +rpc kill --force` stops it outright. Either way the session
+  state is lost.
 - `exit()` in an eval stops the shared server. The client reports that the server
   exited.
 - A client killed with SIGTERM prints a signal report and stack trace. Julia's own

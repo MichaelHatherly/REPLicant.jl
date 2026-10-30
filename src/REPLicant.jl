@@ -37,6 +37,7 @@ else
 end
 
 include("server.jl")
+include("restart.jl")
 include("registry.jl")
 include("project.jl")
 include("protocol.jl")
@@ -47,5 +48,7 @@ include("status.jl")
 include("client.jl")
 include("channel.jl")
 include("precompile.jl")
+
+__init__() = (LAUNCH_DIR[] = pwd())
 
 end # module REPLicant
