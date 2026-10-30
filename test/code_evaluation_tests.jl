@@ -131,13 +131,24 @@ end
     @test contains(result.output, "viac")
 end
 
-@testitem "eval_c_write_past_pipe_buffer_is_captured" tags = [:code_evaluation] begin
+# Eval code defining `cwrite(fd, bytes)`, a raw C write to `fd`. The Windows CRT
+# exports it as `_write`.
+@testsnippet CWrite begin
+    const CWRITE = """
+    cwrite(fd, buf) = @static if Sys.iswindows()
+        ccall(:_write, Cint, (Cint, Ptr{UInt8}, Cuint), fd, buf, length(buf))
+    else
+        ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), fd, buf, length(buf))
+    end
+    """
+end
+
+@testitem "eval_c_write_past_pipe_buffer_is_captured" tags = [:code_evaluation] setup = [CWrite] begin
     mod = Module()
     # A pipe holds 64 KB; a C write larger than that must not be cut short.
-    code = """
-    buf = fill(UInt8('x'), 200_000)
-    ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), 1, buf, length(buf))
-    """
+    code = CWRITE * """
+        cwrite(1, fill(UInt8('x'), 200_000))
+        """
     result = REPLicant._evaluate(code, 1, mod, "")
     @test count(==('x'), result.output) == 200_000
     @test endswith(strip(result.output), "200000")
@@ -171,14 +182,13 @@ end
     end
 end
 
-@testitem "eval_large_c_write_interleaves_with_println" tags = [:code_evaluation] begin
+@testitem "eval_large_c_write_interleaves_with_println" tags = [:code_evaluation] setup = [CWrite] begin
     mod = Module()
-    code = """
-    println("a")
-    buf = fill(UInt8('x'), 100_000)
-    ccall(:write, Cssize_t, (Cint, Ptr{UInt8}, Csize_t), 1, buf, length(buf))
-    println("\\nc");
-    """
+    code = CWRITE * """
+        println("a")
+        cwrite(1, fill(UInt8('x'), 100_000))
+        println("\\nc");
+        """
     result = REPLicant._evaluate(code, 1, mod, "")
     @test split(strip(result.output), '\n') == ["a", "x"^100_000, "c"]
 end

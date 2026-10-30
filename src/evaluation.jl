@@ -100,6 +100,7 @@ end
 # safe.
 struct CaptureSink <: IO
     file::IOStream
+    CaptureSink(file::IOStream) = new(file)
 end
 function Base.unsafe_write(s::CaptureSink, p::Ptr{UInt8}, n::UInt)
     written = unsafe_write(s.file, p, n)
