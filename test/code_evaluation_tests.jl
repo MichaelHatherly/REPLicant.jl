@@ -115,6 +115,27 @@ end
     @test contains(result.output, "after")
 end
 
+@testitem "eval_display_captured_under_a_later_display" tags = [:code_evaluation] begin
+    # The interactive REPL pushes its own display after the server installs
+    # routing; an eval's `display` must still reach the capture, not that display.
+    struct Grabber <: AbstractDisplay
+        io::IOBuffer
+    end
+    Base.display(d::Grabber, M::MIME"text/plain", x) = show(d.io, M, x)
+    Base.display(d::Grabber, x) = display(d, MIME"text/plain"(), x)
+
+    REPLicant._install_routing!()
+    grabber = Grabber(IOBuffer())
+    pushdisplay(grabber)
+    try
+        result = REPLicant._evaluate("display([1, 2, 3])", 1, Module(), "")
+        @test contains(result.output, "3-element Vector{Int64}")
+        @test isempty(take!(grabber.io))
+    finally
+        popdisplay(grabber)
+    end
+end
+
 @testitem "eval_log_record_is_captured" tags = [:code_evaluation] begin
     mod = Module()
     result = REPLicant._evaluate("@info \"from the eval\"; 1 + 1", 1, mod, "")

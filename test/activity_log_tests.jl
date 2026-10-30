@@ -135,6 +135,24 @@ end
     @test contains(body, "42")
 end
 
+@testitem "activity_tees_display_under_a_later_display" tags = [:activity] setup = [Utilities] begin
+    import REPLicant
+
+    # The REPL pushes its own display after routing is installed. A human input
+    # puts `RouterDisplay` back on top so the displayed result is teed.
+    struct Grabber <: AbstractDisplay end
+    REPLicant._install_routing!()
+    grabber = Grabber()
+    pushdisplay(grabber)
+    try
+        Utilities.reset_activity()
+        REPLicant._record_repl_input("6 * 7")
+        @test last(Base.Multimedia.displays) isa REPLicant.RouterDisplay
+    finally
+        popdisplay(grabber)
+    end
+end
+
 @testitem "activity_human_output_capped" tags = [:activity] setup = [Utilities] begin
     import REPLicant
 

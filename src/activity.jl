@@ -107,6 +107,9 @@ end
 # task by the input-capturing AST transform before the line evaluates; the line's
 # output then streams into the new entry via the tee.
 function _record_repl_input(code::AbstractString)
+    # The displayed result is teed by `RouterDisplay`, so it must sit above the
+    # REPL's own display.
+    _raise_router_display!()
     Base.@lock ACTIVITY_LOCK begin
         _finalize_open!()
         isempty(strip(code)) && return nothing

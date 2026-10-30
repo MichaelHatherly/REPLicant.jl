@@ -84,6 +84,17 @@ function _install_routing!()
     return nothing
 end
 
+# The interactive REPL pushes its own display after routing is installed, and that
+# display writes to the real terminal. Put `RouterDisplay` back on top so a capture
+# gets an eval's `display`; with none bound it declines to the displays below.
+function _raise_router_display!()
+    ROUTING_INSTALLED[] || return nothing
+    last(Base.Multimedia.displays) isa RouterDisplay && return nothing
+    popdisplay(RouterDisplay())
+    pushdisplay(RouterDisplay())
+    return nothing
+end
+
 function _uninstall_routing!()
     ROUTING_INSTALLED[] || return nothing
     redirect_stdout(REAL_OUT[])
@@ -141,6 +152,7 @@ function _capture(f)
     # Capture routes through the installed streams. The server installs them at
     # start; install here too so a direct `_capture` (e.g. a test) still routes.
     _install_routing!()
+    _raise_router_display!()
 
     path, file = mktemp()
     try
