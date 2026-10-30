@@ -113,6 +113,8 @@ function Base.write(s::CaptureSink, b::UInt8)
     return written
 end
 Base.flush(s::CaptureSink) = flush(s.file)
+# `ConsoleLogger` falls back to `stderr` when its stream reports closed.
+Base.isopen(s::CaptureSink) = isopen(s.file)
 
 # `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
 # wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap

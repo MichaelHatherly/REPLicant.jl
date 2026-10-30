@@ -115,6 +115,14 @@ end
     @test contains(result.output, "after")
 end
 
+@testitem "eval_log_record_is_captured" tags = [:code_evaluation] begin
+    mod = Module()
+    result = REPLicant._evaluate("@info \"from the eval\"; 1 + 1", 1, mod, "")
+    @test !result.errored
+    @test contains(result.output, "Info: from the eval")
+    @test endswith(strip(result.output), "2")
+end
+
 @testitem "eval_subprocess_output_is_captured" tags = [:code_evaluation] begin
     mod = Module()
     # `run(cmd)` inherits raw fd 1, bypassing the Julia `stdout` object. fd-level
