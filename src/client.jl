@@ -78,10 +78,11 @@ end
 # The selection cascade over `candidates`: narrow to the deepest project that owns
 # `project`, pick by --name or auto-select the lone server; finally fall back to a
 # global name match. Returns the chosen entry. A fallback to a server outside the
-# caller's project warns on `err`.
+# caller's project warns on `err`. With `drop_gone`, servers that died without
+# cleanup drop out of each stage's candidates while one of them is still there.
 function _select_entry(
         candidates::Vector{RegistryEntry}, project::AbstractString, name::AbstractString;
-        err::IO = stderr,
+        err::IO = stderr, drop_gone::Bool = false,
     )
     isempty(candidates) && error("no running REPLicant servers found")
 
@@ -94,6 +95,7 @@ function _select_entry(
     if !isempty(owning)
         deepest = maximum(length(_canonical(e.project)) for e in owning)
         scoped = filter(e -> length(_canonical(e.project)) == deepest, owning)
+        drop_gone && (scoped = _drop_gone(scoped))
         if !isempty(name)
             index = findfirst(e -> e.name == name, scoped)
             isnothing(index) &&
@@ -111,6 +113,7 @@ function _select_entry(
 
     if !isempty(name)
         named = filter(e -> e.name == name, candidates)
+        drop_gone && (named = _drop_gone(named))
         length(named) == 1 && return _warn_foreign(err, named[1], target)
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
@@ -150,11 +153,14 @@ function _kill_target(
         isnothing(index) && error("no REPLicant server registered on port $port")
         return entries[index]
     end
-    # A server that died without cleanup leaves an entry that would make selection
-    # ambiguous. Ignore those while any server is still there; with none, the dead
-    # entry still resolves, so `kill` can report it gone and remove it.
+    return _select_entry(entries, project, name; err, drop_gone = true)
+end
+
+# `entries` without those whose servers are gone, or all of them when every one is.
+# A lone dead entry still resolves, so `kill` can report it gone and remove it.
+function _drop_gone(entries::Vector{RegistryEntry})
     present = filter(e -> !_server_gone(e.port, e.pid), entries)
-    return _select_entry(isempty(present) ? entries : present, project, name; err)
+    return isempty(present) ? entries : present
 end
 
 # Consume the value following a flag at `index`, erroring when the flag ends the

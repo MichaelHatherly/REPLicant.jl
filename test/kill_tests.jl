@@ -68,6 +68,21 @@ end
     end
 end
 
+@testitem "kill_target_keeps_dead_entry_of_callers_project" tags = [:kill] setup = [Utilities] begin
+    import REPLicant
+    import Sockets
+
+    # Dead entries drop out only among the caller's own candidates. A dead server
+    # for a subproject must not hand `kill` to the live server of the parent.
+    Utilities.withserver() do server, mod, port
+        sub = mkpath(joinpath(server.project, "docs"))
+        dead, listener = Sockets.listenany(0)
+        close(listener)
+        REPLicant._write_registry_entry(dead, sub; token = "")
+        @test REPLicant._kill_target(-1, sub, "").port == Int(dead)
+    end
+end
+
 @testitem "kill_spares_reused_pid" tags = [:kill] begin
     import REPLicant
     import Sockets
