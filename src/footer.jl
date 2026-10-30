@@ -61,12 +61,16 @@ function display_width(line::AbstractString)
         if c == '\e'
             i = escape_end(line, i)
         else
-            width += textwidth(c)
+            width += textwidth(visible(c))
             i = nextind(line, i)
         end
     end
     return width
 end
+
+# A control character other than ESC would move the cursor out of its row, so it
+# is drawn as a space.
+visible(c::AbstractChar) = iscntrl(c) ? ' ' : c
 
 """
     fit(line, width)
@@ -87,6 +91,7 @@ function fit(line::AbstractString, width::Integer)
             write(io, SubString(line, i, prevind(line, j)))
             i = j
         else
+            c = visible(c)
             w = textwidth(c)
             used + w > width && break
             write(io, c)
@@ -125,8 +130,12 @@ end
 # without losing the prompt.
 const DEFAULT_SHOW_ROWS = 8
 
-default_rows(::Union{AbstractString, Function}, height::Integer) = max(height - 1, 0)
-default_rows(::Any, height::Integer) = min(DEFAULT_SHOW_ROWS, max(height - 1, 0))
+# The most rows the footer may claim. The scrolling region keeps the prompt's row
+# and one more, since DECSTBM ignores a region whose top is its bottom.
+max_rows(height::Integer) = max(height - 2, 0)
+
+default_rows(::Union{AbstractString, Function}, height::Integer) = max_rows(height)
+default_rows(::Any, height::Integer) = min(DEFAULT_SHOW_ROWS, max_rows(height))
 
 """
     render(value, rows, width)
@@ -186,7 +195,8 @@ function footer_lines(sections, height::Integer, width::Integer)
         try
             append!(lines, section_lines(section, height, width))
         catch err
-            push!(lines, "\e[31m$label: $(sprint(showerror, err))\e[0m")
+            message = first(split(sprint(showerror, err), '\n'))
+            push!(lines, "\e[31m$label: $message\e[0m")
         end
     end
     return lines
@@ -208,8 +218,7 @@ function paint(
         force_region::Bool = false,
         clear_rows = 1:0,
     )
-    # The footer never claims the row the prompt sits on.
-    n = min(length(lines), max(height - 1, 0))
+    n = min(length(lines), max_rows(height))
     n == 0 && prev == 0 && !force_region && isempty(clear_rows) && return ""
 
     io = IOBuffer()
@@ -456,10 +465,12 @@ end
 
 # Write the footer update as a single `write`, so it cannot land inside one of
 # the line editor's redraws.
-function repaint!(footer::Footer)
+function repaint!(footer::Footer; paused::Bool = prompt_evaluating())
     sections = Base.@lock footer.lock begin
         # A disabled footer owns no rows. `disable!` hands them back itself.
         footer.enabled || return nothing
+        # Upkeep repaints once the prompt's eval returns, forcing the region back.
+        paused && return (footer.stale = true; nothing)
         copy(footer.sections)
     end
     height, width = displaysize(footer.io)
@@ -468,9 +479,11 @@ function repaint!(footer::Footer)
     # block `set!` and every other caller behind it.
     lines = footer_lines(sections, height, width)
 
-    bytes = Base.@lock footer.lock begin
+    # Written under the lock, so a `disable!` cannot hand the region back between
+    # this repaint's check and its write.
+    Base.@lock footer.lock begin
         footer.enabled || return nothing
-        n = min(length(lines), max(height - 1, 0))
+        n = min(length(lines), max_rows(height))
         # A resize resets DECSTBM, so the region has to be claimed again.
         resized = (height, width) != (footer.painted.height, footer.painted.width)
         painted = paint(
@@ -483,9 +496,8 @@ function repaint!(footer::Footer)
         )
         footer.painted = Painted(n, height, width, [min(display_width(line), width) for line in lines[1:n]])
         footer.stale = false
-        painted
+        isempty(painted) || write(footer.io, painted)
     end
-    isempty(bytes) || write(footer.io, bytes)
     return nothing
 end
 
@@ -606,10 +618,32 @@ function disturbed!()
     return nothing
 end
 
+repl_backend() = isdefined(Base, :active_repl_backend) ? Base.active_repl_backend : nothing
+
+"""
+    prompt_evaluating(backend = repl_backend())
+
+Whether code typed at the prompt is running. It owns the screen until it returns,
+and may be a full-screen program like `less` that a paint would draw over.
+
+The backend sets `in_eval` before the code runs but clears it only on a normal
+return, so after an error it stays set at an idle prompt. The backend waiting on
+its input channel again is what says the eval is over.
+"""
+function prompt_evaluating(backend = repl_backend())
+    backend === nothing && return false
+    hasproperty(backend, :in_eval) && backend.in_eval === true || return false
+    hasproperty(backend, :repl_channel) || return true
+    return !awaiting_input(backend.repl_channel)
+end
+
+# Whether a task is blocked taking from `channel`: the backend's state between evals.
+awaiting_input(channel::Channel) = !isempty(channel.cond_take.waitq)
+awaiting_input(::Any) = false
+
 function install_eval_hook!()
     EVAL_HOOKED[] && return true
-    isdefined(Base, :active_repl_backend) || return false
-    backend = Base.active_repl_backend
+    backend = repl_backend()
     backend === nothing && return false
     hasproperty(backend, :ast_transforms) || return false
     # Applied with `invokelatest`, so a closure pushed from here is safe to call
@@ -626,7 +660,8 @@ function upkeep(footer::Footer)
         install_eval_hook!()
         # The REPL extension can load after this task started, in a newer world.
         Base.invokelatest(__install_keys, nothing)
-        footer.enabled || continue
+        # The hook fires before the prompt's eval runs; repair once it has returned.
+        (footer.enabled && !prompt_evaluating()) || continue
         evaluated = EVALUATED[]
         evaluated && (EVALUATED[] = false)
         live = LIVE[]
@@ -726,21 +761,17 @@ end
 Give the reserved rows back to the scrolling region and stop painting.
 """
 function disable!(footer::Footer = FOOTER)
-    bytes = Base.@lock footer.lock begin
-        if footer.enabled
-            footer.enabled = false
-            height, width = displaysize(footer.io)
-            seq = paint(footer.painted.rows, String[], height, width; force_region = true)
-            footer.painted = Painted()
-            footer.stale = false
-            seq
-        else
-            ""
-        end
+    Base.@lock footer.lock begin
+        footer.enabled || return nothing
+        footer.enabled = false
+        height, width = displaysize(footer.io)
+        seq = paint(footer.painted.rows, String[], height, width; force_region = true)
+        footer.painted = Painted()
+        footer.stale = false
+        # Written here rather than left to the dispatch task, which idles from the
+        # moment the footer is disabled and would never pick this up.
+        isempty(seq) || write(footer.io, seq)
     end
-    # Written here rather than left to the dispatch task, which idles from the
-    # moment the footer is disabled and would never pick this up.
-    isempty(bytes) || write(footer.io, bytes)
     return nothing
 end
 

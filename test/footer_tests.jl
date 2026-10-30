@@ -45,6 +45,12 @@ end
     @test F.display_width("\e[31mhello\e[0m") == 5
     @test F.display_width("日本語") == 6
     @test F.display_width("") == 0
+
+    # A control character would move the cursor, so each one shows as a space.
+    @test F.fit("a\tb", 10) == "a b"
+    @test F.display_width("a\tb") == 3
+    @test F.fit("abc\r\nxyz", 10) == "abc  xyz"
+    @test F.fit("a\tb", 2) == "a "
 end
 
 @testitem "footer_lines_from_sections" tags = [:footer] setup = [FooterHarness] begin
@@ -124,6 +130,12 @@ end
     @test lines[1] == "before"
     @test occursin("bad", lines[2]) && occursin("no", lines[2])
     @test lines[3] == "after"
+
+    # A multi-line error message keeps to the one row.
+    multiline(_) = error("first\nsecond")
+    lines = flines(sections((:bad, multiline, nothing)), 24, 80)
+    @test length(lines) == 1
+    @test occursin("first", lines[1]) && !occursin("second", lines[1])
 end
 
 @testitem "footer_paint_row_arithmetic" tags = [:footer] setup = [FooterHarness] begin
@@ -150,9 +162,10 @@ end
 
     @test F.paint(0, String[], 24, 80) == ""
 
-    # The footer never takes the last row available to the prompt.
+    # The footer leaves the scrolling region two rows, the fewest DECSTBM accepts.
     @test F.paint(0, ["a", "b", "c"], 3, 80) ==
-        "\e7" * "\e[2S" * "\e[1;1r" * "\e[2;1Ha\e[0m\e[K" * "\e[3;1Hb\e[0m\e[K" * "\e8" * "\e[2A"
+        "\e7" * "\e[1S" * "\e[1;2r" * "\e[3;1Ha\e[0m\e[K" * "\e8" * "\e[1A"
+    @test F.default_rows("text", 3) == 1
 
     # After a resize or anything else that clobbers DECSTBM, the region must be set
     # even though the footer has not changed size.
@@ -224,6 +237,59 @@ end
     # Same rows, same contents, so only the contents are rewritten.
     F.repaint!(footer)
     @test written(buf) == "\e7\e[24;1Hone\e[0m\e[K\e8"
+end
+
+@testitem "footer_waits_out_a_prompt_eval" tags = [:footer] setup = [FooterHarness] begin
+    F, harness, written = FooterHarness.F, FooterHarness.harness, FooterHarness.written
+
+    # Code run at the prompt owns the screen until it returns: `less` or `vim` on the
+    # alternate screen would be drawn over. The paint waits, then claims the region.
+    running = Channel{Any}(1)
+    @test F.prompt_evaluating((; in_eval = true, repl_channel = running))
+    @test !F.prompt_evaluating((; in_eval = false, repl_channel = running))
+    @test !F.prompt_evaluating(nothing)
+
+    # An eval that throws leaves `in_eval` set, but the backend has gone back to
+    # waiting for the next input, so the prompt is idle again.
+    idle = Channel{Any}(1)
+    waiter = @async take!(idle)
+    yield()
+    @test !F.prompt_evaluating((; in_eval = true, repl_channel = idle))
+    put!(idle, nothing)
+    wait(waiter)
+
+    footer, buf = harness(24, 80)
+    F.set!(:a, "one", footer)
+    F.repaint!(footer; paused = true)
+    @test written(buf) == ""
+    F.repaint!(footer)
+    @test written(buf) == "\e7\e[1S\e[1;23r\e[24;1Hone\e[0m\e[K\e8\e[1A"
+end
+
+@testitem "footer_writes_under_its_lock" tags = [:footer] setup = [FooterHarness] begin
+    F = FooterHarness.F
+
+    # A repaint written after `disable!` released the region would claim it again,
+    # so every write holds the lock `disable!` takes.
+    mutable struct LockProbe <: IO
+        footer::Any
+        held::Vector{Bool}
+    end
+    function Base.unsafe_write(probe::LockProbe, ::Ptr{UInt8}, n::UInt)
+        push!(probe.held, islocked(probe.footer.lock))
+        return n
+    end
+    Base.displaysize(::LockProbe) = (24, 80)
+
+    probe = LockProbe(nothing, Bool[])
+    footer = F.Footer(probe)
+    probe.footer = footer
+    footer.enabled = true
+    F.set!(:a, "one", footer)
+    F.repaint!(footer)
+    F.disable!(footer)
+    @test length(probe.held) == 2
+    @test all(probe.held)
 end
 
 @testitem "footer_repaint_across_a_resize" tags = [:footer] setup = [FooterHarness] begin

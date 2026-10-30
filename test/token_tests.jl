@@ -29,6 +29,57 @@ end
     end
 end
 
+@testitem "wrong_token_rejected_before_body_is_read" tags = [:protocol, :token] begin
+    # A peer without the token must not get the server to buffer the body it
+    # announces, up to 16MB per connection. The token is checked as it arrives.
+    body = string(REPLicant._new_token(), repeat("x", 1024 * 1024))
+    frame = IOBuffer()
+    REPLicant._write_frame(frame, REPLicant.REQUEST_EVAL, body)
+    read_wrong_token(io) =
+    try
+        REPLicant._read_request(seekstart(io), REPLicant._new_token(), 5.0)
+    catch error
+        error
+    end
+    read_wrong_token(frame)
+    @test read_wrong_token(frame) isa REPLicant.Unauthorized
+    @test @allocated(read_wrong_token(frame)) < 256 * 1024
+end
+
+@testitem "wrong_token_body_discard_has_one_deadline" tags = [:protocol, :token] begin
+    import REPLicant
+    import Sockets
+
+    # A peer without the token that trickles its body a chunk at a time gets one
+    # read timeout for the whole of it, not a fresh one per chunk.
+    port, listener = Sockets.listenany(0)
+    chunk = repeat("x", 64 * 1024)
+    peer = @async begin
+        sock = Sockets.connect(Sockets.localhost, port)
+        write(sock, REPLicant.PROTOCOL_MAGIC, REPLicant.PROTOCOL_VERSION, REPLicant.REQUEST_EVAL)
+        write(sock, hton(UInt32(REPLicant.TOKEN_LENGTH + 3 * ncodeunits(chunk))), REPLicant._new_token())
+        for _ in 1:3
+            write(sock, chunk)
+            flush(sock)
+            sleep(0.6)
+        end
+        close(sock)
+    end
+    sock = Sockets.accept(listener)
+    err = try
+        REPLicant._read_request(sock, REPLicant._new_token(), 1.0)
+    catch error
+        error
+    end
+    @test err isa REPLicant.ReadTimeout
+    close(sock)
+    close(listener)
+    try
+        wait(peer)
+    catch  # dendro-ignore: empty_catch -- the peer's writes fail once the server closes
+    end
+end
+
 @testitem "ping_without_token_reads_as_dead" tags = [:protocol, :token] setup = [Utilities] begin
     Utilities.withserver() do server, mod, port
         frame = Utilities.requestframe(port, REPLicant.REQUEST_PING, ""; token = "")

@@ -238,20 +238,35 @@ function _listen_and_register!(srv::Server)
     srv.started = started
     srv.verbose && @info "REPLicant listening" port_number project entry_path
 
-    # Ensure cleanup happens even if the Julia process is terminated. A restart keeps
-    # the listener open: closing it ends the server task, and a script blocked on
-    # that task would return and exit the process before the re-exec.
-    atexit() do
+    Base.@lock RUNNING_LOCK begin
+        RUNNING_SERVERS[srv] = (server, entry_path)
+        EXIT_HOOKED[] || (atexit(_exit_cleanup); EXIT_HOOKED[] = true)
+    end
+
+    return server, port_number, entry_path
+end
+
+# The servers still running in this process, with the listener and registry entry
+# exit has to clean up for each. One exit hook serves them all, and a server leaves
+# on shutdown, so a closed server's old port is never unregistered at exit.
+const RUNNING_SERVERS = IdDict{Server, Tuple{Sockets.TCPServer, String}}()
+const RUNNING_LOCK = ReentrantLock()
+const EXIT_HOOKED = Ref(false)
+
+# Clean up after every running server as the process exits. A restart keeps the
+# listener open: closing it ends the server task, and a script blocked on that task
+# would return and exit the process before the re-exec.
+function _exit_cleanup()
+    for (srv, (listener, entry_path)) in Base.@lock(RUNNING_LOCK, collect(RUNNING_SERVERS))
         try
             RESTARTING[] ? _unregister!(srv, entry_path) :
-                _shutdown_server(server, srv, entry_path)
+                _shutdown_server(listener, srv, entry_path)
         catch error
             # Use @debug to avoid noise during forced shutdowns
             @debug "Error during shutdown" error
         end
     end
-
-    return server, port_number, entry_path
+    return nothing
 end
 
 # Run the accept loop with its worker, draining and shutting down on exit.
@@ -277,25 +292,59 @@ function _serve(server, srv::Server, entry_path)
             @error "Unexpected error in server loop" error
         end
     finally
-        # Signal worker to stop by closing the queue
+        # Closing the queue stops the worker, which refuses what is still queued.
         close(request_queue)
-
-        # Wait for worker to finish processing remaining requests
+        _interrupt_eval(srv)
+        # Unregister before waiting, since an eval that never yields ignores the
+        # interrupt and would keep the worker running.
+        _close_and_unregister!(server, srv, entry_path)
         try
             wait(worker)
         catch error
             @debug "Worker task error during shutdown" error
         end
-
-        # Ensure cleanup runs even if the server loop fails
-        _shutdown_server(server, srv, entry_path)
+        _release_routing!(srv)
     end
 end
 
-# Close the listener, drop this process's handle, and remove the registry entry.
+const SHUTTING_DOWN = "Server shutting down"
+
+# Hand a request to the worker. A queue closed by shutdown refuses it.
+function _enqueue!(request_queue::Channel{ClientRequest}, request::ClientRequest)
+    try
+        put!(request_queue, request)
+    catch error
+        error isa InvalidStateException || rethrow()
+        throw(RequestError(SHUTTING_DOWN))
+    end
+    return nothing
+end
+
+# Answer a request the closing server will not evaluate.
+function _refuse_shutting_down(request::ClientRequest, active_connections::Threads.Atomic{Int})
+    try
+        _write_frame(request.socket, RESPONSE_ERR, SHUTTING_DOWN)
+    catch error
+        @debug "Failed to send shutdown error to client" id = request.id error
+    finally
+        close(request.socket)
+        Threads.atomic_sub!(active_connections, 1)
+    end
+    return nothing
+end
+
+# Close the listener, drop this process's handle, and remove the registry entry, then
+# give up this server's hold on output routing.
 function _shutdown_server(listener, srv::Server, entry_path)
+    _close_and_unregister!(listener, srv, entry_path)
+    return _release_routing!(srv)
+end
+
+# Stop taking connections and leave the registry. Routing stays, since an eval still
+# running when the server closes is capturing through it.
+function _close_and_unregister!(listener, srv::Server, entry_path)
+    Base.@lock RUNNING_LOCK delete!(RUNNING_SERVERS, srv)
     close(listener)
-    _release_routing!(srv)
     return _unregister!(srv, entry_path)
 end
 
@@ -316,6 +365,10 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
         Threads.@spawn begin
             try
                 for request in request_queue
+                    if !isopen(request_queue)
+                        _refuse_shutting_down(request, active_connections)
+                        continue
+                    end
                     # Run the eval in its own task so an interrupt request frees it
                     # without unwinding the worker loop. The worker stays sequential:
                     # it waits for each eval before taking the next, so only one eval
@@ -347,8 +400,11 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                             end
                         end
                     end
-                    _set_busy!(srv, Dates.now(), request.code)
                     srv.interrupt_signal = signal
+                    # A close between the check above and publishing the signal
+                    # found nothing to interrupt.
+                    isopen(request_queue) || notify(signal)
+                    _set_busy!(srv, Dates.now(), request.code)
                     try
                         wait(eval_task)
                     catch error
@@ -397,7 +453,7 @@ function _admit(
         srv.verbose && @warn "Connection rejected - server at capacity" id current =
             active_connections[] max = srv.max_connections
         # Reject off the accept loop so draining the request never blocks accepting.
-        @async _reject_at_capacity(sock, id, srv.read_timeout_seconds)
+        @async _reject_at_capacity(sock, id, srv.token, srv.read_timeout_seconds)
     else
         Threads.atomic_add!(active_connections, 1)
         srv.verbose &&
@@ -499,7 +555,7 @@ function _dispatch(
             mod = _request_module(srv, decoded.mod)
             isempty(decoded.cwd) || isdir(decoded.cwd) ||
                 throw(RequestError("no such directory: $(decoded.cwd)"))
-            put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
+            _enqueue!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
             enqueued = true
         end
     catch error

@@ -27,6 +27,41 @@
     end
 end
 
+@testitem "restart_during_eval_keeps_terminal_output" tags = [:restart] setup = [Utilities] begin
+    import REPLicant
+
+    # The running eval holds fd 1/2 on its capture. The restarted process must
+    # still write to the terminal the server launched on.
+    @static if !Sys.iswindows()
+        mktempdir() do registry
+            mktempdir() do work
+                log = joinpath(work, "stdout.log")
+                withenv("REPLICANT_DIR" => registry) do
+                    Utilities.spawn_server(registry, work; out = log) do port, pid
+                        busy = @async REPLicant.cli(
+                            ["--port=$port", "-e", "sleep(600)"]; out = IOBuffer(), err = IOBuffer(),
+                        )
+                        deadline = time() + 30
+                        while isempty(something(REPLicant._ping_status(port), "")) && time() < deadline
+                            sleep(0.05)
+                        end
+                        @test !isempty(REPLicant._ping_status(port))
+
+                        @test REPLicant.cli(["restart", "--port=$port"]; out = IOBuffer(), err = IOBuffer()) == 0
+                        wait(busy)
+
+                        deadline = time() + 30
+                        while count("server up", read(log, String)) < 2 && time() < deadline
+                            sleep(0.05)
+                        end
+                        @test count("server up", read(log, String)) == 2
+                    end
+                end
+            end
+        end
+    end
+end
+
 @testitem "restart_refused_on_windows" tags = [:restart] setup = [Utilities] begin
     import REPLicant
 

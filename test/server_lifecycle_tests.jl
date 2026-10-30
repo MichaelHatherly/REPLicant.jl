@@ -99,6 +99,58 @@ end
     end
 end
 
+@testitem "close_keeps_capturing_an_eval_that_outlives_the_interrupt" tags = [:server_lifecycle] setup = [Utilities] begin
+    import REPLicant
+
+    # The eval swallows the shutdown interrupt and carries on printing. Its output
+    # must still reach its client, so the server keeps its hold on routing until
+    # the worker finishes, and gives it up after.
+    Utilities.withserver() do server, mod, port
+        code = "try sleep(600) catch end; sleep(2); println(\"after interrupt\"); 1"
+        running = @async Utilities.request(port, code)
+        @test timedwait(() -> !isnothing(server.busy_since), 10.0) === :ok
+        close(server)
+        sleep(0.5)
+        @test server in REPLicant.ROUTING_SERVERS
+        @test timedwait(() -> istaskdone(running), 10.0) === :ok
+        @test contains(fetch(running), "after interrupt")
+        @test timedwait(() -> istaskdone(server.task), 10.0) === :ok
+        @test !(server in REPLicant.ROUTING_SERVERS)
+    end
+end
+
+@testitem "closed_servers_leave_no_exit_hooks" setup = [Utilities] tags = [:server_lifecycle] begin
+    import REPLicant
+
+    # A warm session that runs this suite starts and closes many servers. Each one
+    # left an exit hook holding it, which at exit removed whatever entry by then sat
+    # on its old port, even another process's.
+    Utilities.withproject() do start, registry
+        server, _ = start()
+        Utilities.wait_closed(server)
+        hooks = length(Base.atexit_hooks)
+        for _ in 1:3
+            server, _ = start()
+            Utilities.wait_closed(server)
+        end
+        @test length(Base.atexit_hooks) == hooks
+    end
+end
+
+@testitem "label_cleared_beside_unlabeled_server" setup = [Utilities] tags =
+    [:server_lifecycle] begin
+    import REPLicant
+
+    Utilities.withproject() do start, registry
+        labeled, port = start()
+        REPLicant.label!(labeled, "tests")
+        start()
+        # An empty label clears the name; unlabeled servers do not hold "".
+        @test REPLicant.label!(labeled, "") == ""
+        @test !contains(read(joinpath(registry, string(port)), String), "name=")
+    end
+end
+
 @testitem "label_rejects_newline" setup = [Utilities] tags = [:server_lifecycle] begin
     import REPLicant
 
@@ -269,4 +321,27 @@ end
         server
     end
     @test close(server) === nothing
+end
+
+@testitem "close_interrupts_running_eval" tags = [:server_lifecycle] setup = [Utilities] begin
+    import REPLicant
+
+    # A close must not wait out the running eval, nor run the ones queued behind it.
+    Utilities.withserver() do server, mod, port
+        entry = REPLicant._registry_entry_path(port)
+        running = @async Utilities.request(port, "sleep(600)")
+        deadline = time() + 30
+        while isempty(something(REPLicant._ping_status(port), "")) && time() < deadline
+            sleep(0.05)
+        end
+        queued = @async Utilities.request(port, "global queued_ran = true")
+        sleep(0.5)
+
+        close(server)
+        @test timedwait(() -> istaskdone(server.task), 10) === :ok
+        @test !isfile(entry)
+        @test contains(fetch(running), "InterruptException")
+        @test contains(fetch(queued), "shutting down")
+        @test !isdefined(mod, :queued_ran)
+    end
 end

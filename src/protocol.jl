@@ -19,6 +19,8 @@
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
+# The longest wait a `Timer` accepts: libuv counts it in UInt64 milliseconds.
+const MAX_TIMEOUT_SECONDS = typemax(UInt64) / 1000
 # Liveness probes are answered off the worker queue, so a live server always
 # replies in milliseconds. A short timeout keeps `ls` and resolution snappy and
 # lets a wedged or version-skewed peer read as dead quickly.
@@ -26,7 +28,7 @@ const PING_TIMEOUT_SECONDS = 2.0
 const MAX_REQUEST_BYTES = 16 * 1024 * 1024  # 16MB
 # An eval's output is bounded only by what it prints. The client trusts its server,
 # so it accepts any body the header can express.
-const MAX_RESPONSE_BYTES = Int(typemax(UInt32))
+const MAX_RESPONSE_BYTES = Int(min(typemax(UInt32), typemax(Int)))
 
 # Appended to magic/version mismatch errors. A peer that fails the header checks
 # is usually a client or server on a different REPLicant version, which the
@@ -75,9 +77,10 @@ function _take_field(bytes, pos::Integer)
     isnothing(newline) && error("malformed eval body: missing field length")
     count = parse(Int, String(bytes[pos:(newline - 1)]))
     start = newline + 1
-    stop = start + count - 1
-    (count < 0 || stop > lastindex(bytes)) &&
+    # Compared against what remains, so a huge `count` cannot overflow `stop`.
+    (count < 0 || count > lastindex(bytes) - start + 1) &&
         error("malformed eval body: field length out of range")
+    stop = start + count - 1
     return String(bytes[start:stop]), stop + 1
 end
 
@@ -88,6 +91,15 @@ struct ReadTimeout <: Exception
 end
 Base.showerror(io::IO, err::ReadTimeout) =
     print(io, "Read timeout: no data received within $(err.timeout_seconds) seconds")
+
+# A frame cut short: the peer closed after sending part of it, as a client
+# interrupted mid-send does.
+struct TruncatedFrame <: Exception
+    expected::Int
+    received::Int
+end
+Base.showerror(io::IO, err::TruncatedFrame) =
+    print(io, "Incomplete frame: expected $(err.expected) bytes, got $(err.received)")
 
 # A peer whose first bytes are not the REPLicant magic: another tool probing the
 # port (an HTTP health check, say), or a client from a pre-framing release.
@@ -126,10 +138,13 @@ end
 
 # Write one frame: the fixed header, then the body bytes.
 function _write_frame(io::IO, type::UInt8, body::String)
+    # Sized before the first byte goes out, so an oversized body fails with no
+    # partial header for the peer to misread.
+    nbytes = UInt32(ncodeunits(body))
     write(io, PROTOCOL_MAGIC)
     write(io, PROTOCOL_VERSION)
     write(io, type)
-    write(io, hton(UInt32(ncodeunits(body))))
+    write(io, hton(nbytes))
     write(io, body)
     flush(io)
     return nothing
@@ -159,17 +174,44 @@ _write_request(io::IO, token::String, type::UInt8, body::String) =
 
 # Read a request frame and check its token, returning the frame with the token
 # stripped from its body. The comparison runs in constant time.
+#
+# The token is read and checked before the rest of the body, so a peer without it
+# cannot make the server buffer the body its header announces. The rest is still
+# drained before the rejection, so the client finishes its write and reads it.
 function _read_request(sock::IO, token::String, timeout_seconds::Float64)
-    frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds)
-    isnothing(frame) && return nothing
-    bytes = codeunits(frame.body)
-    length(bytes) >= TOKEN_LENGTH || throw(Unauthorized())
+    header = _read_header(sock, REQUEST_TYPES; timeout_seconds, max_bytes = MAX_REQUEST_BYTES)
+    isnothing(header) && return nothing
+    type, count = header
+    if count < TOKEN_LENGTH
+        _discard_body(sock, count; timeout_seconds)
+        throw(Unauthorized())
+    end
+    presented = _read_body(sock, TOKEN_LENGTH; timeout_seconds)
     mismatch = 0x00
-    for (actual, expected) in zip(bytes, codeunits(token))
+    for (actual, expected) in zip(presented, codeunits(token))
         mismatch |= actual ⊻ expected
     end
-    mismatch == 0x00 || throw(Unauthorized())
-    return (; frame.type, body = String(bytes[(TOKEN_LENGTH + 1):end]))
+    if mismatch != 0x00
+        _discard_body(sock, count - TOKEN_LENGTH; timeout_seconds)
+        throw(Unauthorized())
+    end
+    return (; type, body = String(_read_body(sock, count - TOKEN_LENGTH; timeout_seconds)))
+end
+
+# Read and drop `count` body bytes a chunk at a time, holding no more than one chunk.
+# One timeout covers the whole body, as it does for a body that is kept.
+function _discard_body(sock::IO, count::Int; timeout_seconds)
+    chunk = Vector{UInt8}(undef, min(count, 64 * 1024))
+    _read_with_timeout(sock; timeout_seconds) do
+        remaining = count
+        while remaining > 0
+            n = min(remaining, length(chunk))
+            read = readbytes!(sock, chunk, n)::Int
+            read == n || throw(TruncatedFrame(count, count - remaining + read))
+            remaining -= n
+        end
+    end
+    return nothing
 end
 
 # Connect to the server on `port` and send one request carrying its registered
@@ -199,11 +241,13 @@ function _parse_header(header::Vector{UInt8}, valid_types::Tuple{Vararg{UInt8}},
     type = read(buffer, UInt8)
     any(==(type), valid_types) || error("Unknown message type: $type")
 
-    count = Int(ntoh(read(buffer, UInt32)))
+    # Checked before converting, since a count past `typemax(Int32)` has no `Int` on
+    # a 32-bit platform.
+    count = ntoh(read(buffer, UInt32))
     count > max_bytes &&
         error("Frame too large: $count bytes exceeds maximum of $max_bytes")
 
-    return type, count
+    return type, Int(count)
 end
 
 # Read one frame, validating it against `valid_types`. Returns `(; type, body)`,
@@ -213,30 +257,40 @@ function _read_frame(
         timeout_seconds = READ_TIMEOUT_SECONDS,
         max_bytes::Int = MAX_REQUEST_BYTES,
     )
+    header = _read_header(sock, valid_types; timeout_seconds, max_bytes)
+    isnothing(header) && return nothing
+    type, count = header
+    return (; type, body = String(_read_body(sock, count; timeout_seconds)))
+end
+
+# Read and validate a frame header, returning `(type, body_length)`, or `nothing`
+# when the peer closed without sending.
+function _read_header(sock::IO, valid_types::Tuple{Vararg{UInt8}}; timeout_seconds, max_bytes::Int)
     header = _read_with_timeout(sock; timeout_seconds) do
         read(sock, FRAME_HEADER_BYTES)
     end::Vector{UInt8}
     isempty(header) && return nothing
     length(header) == FRAME_HEADER_BYTES ||
-        error("Incomplete frame header: expected $FRAME_HEADER_BYTES bytes, got $(length(header))")
+        throw(TruncatedFrame(FRAME_HEADER_BYTES, length(header)))
+    return _parse_header(header, valid_types, max_bytes)
+end
 
-    type, count = _parse_header(header, valid_types, max_bytes)
-    count == 0 && return (; type, body = "")
-
+# Read exactly `count` body bytes.
+function _read_body(sock::IO, count::Int; timeout_seconds)
+    count == 0 && return UInt8[]
     body = _read_with_timeout(sock; timeout_seconds) do
         read(sock, count)
     end::Vector{UInt8}
-    length(body) == count ||
-        error("Incomplete frame: expected $count body bytes, got $(length(body))")
-    return (; type, body = String(body))
+    length(body) == count || throw(TruncatedFrame(count, length(body)))
+    return body
 end
 
 # Drain the client's framed request before replying so it completes its write and
 # reads the rejection, rather than hitting EPIPE on flush against a socket we
-# already closed.
-function _reject_at_capacity(sock::IO, id, read_timeout_seconds)
+# already closed. A peer without the token is dropped once its token fails.
+function _reject_at_capacity(sock::IO, id, token::String, read_timeout_seconds)
     return try
-        _read_frame(sock, REQUEST_TYPES; timeout_seconds = read_timeout_seconds)
+        _read_request(sock, token, read_timeout_seconds)
         _write_frame(sock, RESPONSE_ERR, "Server at capacity, please retry")
     catch error
         @debug "Failed to send capacity error to client" id error
@@ -254,9 +308,9 @@ function _reply_error(sock::IO, id::Integer, error)
         @warn "Rejected a request without this server's token" id
     elseif error isa RequestError
         @debug "Rejected a request" id error
-    elseif error isa ReadTimeout || error isa Base.IOError
+    elseif error isa ReadTimeout || error isa Base.IOError || error isa TruncatedFrame
         # Routine for a stalled peer or one that hung up, such as a client whose
-        # `--timeout` expired. The socket is closed, so there is no one to reply to.
+        # `--timeout` expired or one interrupted mid-send. There is no one to reply to.
         return nothing
     else
         @error "Error handling client" id error

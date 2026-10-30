@@ -43,6 +43,9 @@ function _reexec()
     flush(stdout)
     flush(stderr)
     ccall(:uv_tty_reset_mode, Cint, ())
+    # An eval still running holds fd 1/2 on its capture, which `execv` would hand
+    # the new process in place of the terminal.
+    ROUTING_INSTALLED[] && _restore_real_fds()
     cd(LAUNCH_DIR[])
     pointers = Ptr{UInt8}[pointer.(argv); C_NULL]
     GC.@preserve argv ccall(:execv, Cint, (Cstring, Ptr{Ptr{UInt8}}), julia, pointers)

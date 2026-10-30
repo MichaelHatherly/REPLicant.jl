@@ -47,6 +47,35 @@ end
     @test REPLicant._cap("short") == "short"
 end
 
+@testitem "activity_human_output_keeps_text_past_a_bad_byte" tags = [:activity] begin
+    import REPLicant
+
+    # Only a character split at the byte cap is trimmed. An invalid byte earlier on,
+    # such as binary or Latin-1 output, keeps what follows it.
+    @test REPLicant._valid_prefix([0xff; Vector{UInt8}("hello")]) == "\xffhello"
+    @test REPLicant._valid_prefix(codeunits("aπ")[1:2]) == "a"
+    @test REPLicant._valid_prefix(Vector{UInt8}("aπ")) == "aπ"
+    @test REPLicant._valid_prefix(UInt8[]) == ""
+end
+
+@testitem "activity_code_capped" tags = [:activity] setup = [Utilities] begin
+    import REPLicant
+
+    # A large script sent as an eval, or pasted at the prompt, is held to the same
+    # bound as output, so the ring cannot grow to hundreds of MB.
+    Utilities.reset_activity()
+    code = repeat("x = 1\n", 10_000)
+    REPLicant._record_activity(:socket, code, "", false)
+    REPLicant._record_repl_input(code)
+    REPLicant._record_repl_input("done")
+    limit = REPLicant.MAX_ENTRY_OUTPUT_BYTES + ncodeunits("\n[code truncated]")
+    for entry in REPLicant.ACTIVITY_LOG
+        @test contains(entry.code, "code truncated")
+        @test ncodeunits(entry.code) <= limit
+    end
+    @test length(REPLicant.ACTIVITY_LOG) == 2
+end
+
 @testitem "activity_skips_empty_code" tags = [:activity] setup = [Utilities] begin
     import REPLicant
 
@@ -154,6 +183,26 @@ end
         @test last(Base.Multimedia.displays) isa REPLicant.RouterDisplay
     finally
         popdisplay(grabber)
+    end
+end
+
+@testitem "activity_skips_output_of_agent_leftover_task" tags = [:activity] setup = [Utilities] begin
+    import REPLicant
+
+    # A task an agent eval spawned keeps printing after the eval returns. That is
+    # the agent's output, not the human's, so it stays out of the human's entry.
+    @static if VERSION >= v"1.11"
+        Utilities.reset_activity()
+        router = REPLicant.Router(Ref{IO}(IOBuffer()))
+        mod = Module()
+        Core.eval(mod, :(router = $router))
+        REPLicant._record_repl_input("human typed this")
+        Utilities.outside_capture() do
+            code = "t = @async (sleep(0.2); print(router, \"agent-bg\")); nothing"
+            REPLicant._evaluate(code, 1, mod, "")
+            wait(Base.invokelatest(getproperty, mod, :t))
+        end
+        @test !contains(String(copy(REPLicant.CURRENT_HUMAN_ENTRY[].out)), "agent-bg")
     end
 end
 

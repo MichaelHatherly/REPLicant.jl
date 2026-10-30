@@ -61,6 +61,22 @@ end
     end
 end
 
+@testitem "interrupt_cli_warns_on_its_err_stream" tags = [:interrupt, :cli] setup = [Utilities] begin
+    import REPLicant
+
+    # Reaching a server outside the caller's project by name warns, and the warning
+    # goes to the stream the caller handed in.
+    Utilities.withserver() do server, mod, port
+        REPLicant.label!(server, "far")
+        mktempdir() do elsewhere
+            out, err = IOBuffer(), IOBuffer()
+            args = ["--name=far", "--project=$elsewhere"]
+            @test REPLicant._interrupt_server(args; out, err) == 0
+            @test contains(String(take!(err)), "falling back")
+        end
+    end
+end
+
 @testitem "await_idle_reflects_busy_state" tags = [:interrupt] setup = [Utilities] begin
     import REPLicant
 

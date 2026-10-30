@@ -67,28 +67,24 @@ end
 # Truncate `s` to `MAX_ENTRY_OUTPUT_BYTES`, cutting on a character boundary so the
 # stored string stays valid UTF-8. A chatty eval (an optimizer dumping thousands of
 # iteration lines) is bounded here rather than flooding the agent's context.
-function _cap(s::AbstractString)
+function _cap(s::AbstractString; label::String = "output")
     ncodeunits(s) <= MAX_ENTRY_OUTPUT_BYTES && return String(s)
     io = IOBuffer()
     for c in s
         position(io) + ncodeunits(c) > MAX_ENTRY_OUTPUT_BYTES && break
         print(io, c)
     end
-    return String(take!(io)) * "\n[output truncated]"
+    return String(take!(io)) * "\n[$label truncated]"
 end
 
-# The open entry's bytes as a valid string. The tee caps by raw byte count and can
-# split a multibyte character at the boundary, so trim back to the last valid prefix.
+# The open entry's bytes as a string. The tee caps by raw byte count and can split a
+# multibyte character at the boundary, so drop a final character left incomplete.
+# Invalid bytes elsewhere are the program's own output and stay.
 function _valid_prefix(bytes::Vector{UInt8})
     s = String(copy(bytes))
-    isvalid(s) && return s
-    n = length(bytes)
-    while n > 0
-        n -= 1
-        s = String(bytes[1:n])
-        isvalid(s) && return s
-    end
-    return ""
+    isempty(s) && return s
+    last = thisind(s, ncodeunits(s))
+    return isvalid(s[last]) ? s : s[1:prevind(s, last)]
 end
 
 # Record an agent (`:socket`) evaluation: its code and rendered response body, the
@@ -97,7 +93,7 @@ end
 function _record_activity(source::Symbol, code::AbstractString, output::AbstractString, errored::Bool)
     isempty(strip(code)) && return nothing
     Base.@lock ACTIVITY_LOCK begin
-        push!(ACTIVITY_LOG, LogEntry(_next_seq(), source, Dates.now(), String(code), _cap(output), errored))
+        push!(ACTIVITY_LOG, LogEntry(_next_seq(), source, Dates.now(), _cap(code; label = "code"), _cap(output), errored))
         _evict!()
     end
     return nothing
@@ -113,7 +109,7 @@ function _record_repl_input(code::AbstractString)
     Base.@lock ACTIVITY_LOCK begin
         _finalize_open!()
         isempty(strip(code)) && return nothing
-        CURRENT_HUMAN_ENTRY[] = OpenEntry(_next_seq(), Dates.now(), String(code), UInt8[])
+        CURRENT_HUMAN_ENTRY[] = OpenEntry(_next_seq(), Dates.now(), _cap(code; label = "code"), UInt8[])
     end
     return nothing
 end

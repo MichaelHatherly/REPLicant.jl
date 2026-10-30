@@ -96,7 +96,15 @@ function _write_registry_entry(
         open(temp, "w") do io
             write(io, _registry_entry(port, project; token, name, started))
         end
-        mv(temp, path; force = true)
+        # `rename` replaces in one step. Before Julia 1.12, `mv(; force)` removes the
+        # old entry first, so a concurrent reader could find none. Windows refuses to
+        # replace a file another process has open, so there `mv` falls back to
+        # removing it first, and readers tolerate the gap.
+        @static if Sys.iswindows()
+            mv(temp, path; force = true)
+        else
+            Base.Filesystem.rename(temp, path)
+        end
     catch error
         isfile(temp) && rm(temp; force = true)
         rethrow(error)
@@ -203,7 +211,7 @@ end
 Label a REPLicant server so clients can select it with `--name`. Without a handle
 it labels the server running in this process, the saved one when there is one.
 Run it at the REPL, or send `REPLicant.label!("name")` over the eval channel so an
-agent labels a server it reaches by `--port`.
+agent labels a server it reaches by `--port`. An empty `name` clears the label.
 
 Errors when no server is running in this session, when `name` contains a newline,
 or when another live server in the same project already holds `name`.
@@ -221,7 +229,8 @@ function label!(srv::Server, name::AbstractString)
     port = srv.port::Int
     project = srv.project::String
     started = srv.started::Dates.DateTime
-    conflict = _label_conflict(project, name, port)
+    # An empty name clears the label, and no server holds it.
+    conflict = isempty(name) ? nothing : _label_conflict(project, name, port)
     isnothing(conflict) || error(
         "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
     )

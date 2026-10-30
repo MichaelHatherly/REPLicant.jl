@@ -78,10 +78,11 @@ end
 # The selection cascade over `candidates`: narrow to the deepest project that owns
 # `project`, pick by --name or auto-select the lone server; finally fall back to a
 # global name match. Returns the chosen entry. A fallback to a server outside the
-# caller's project warns on `err`.
+# caller's project warns on `err`. With `drop_gone`, servers that died without
+# cleanup drop out of each stage's candidates while one of them is still there.
 function _select_entry(
         candidates::Vector{RegistryEntry}, project::AbstractString, name::AbstractString;
-        err::IO = stderr,
+        err::IO = stderr, drop_gone::Bool = false,
     )
     isempty(candidates) && error("no running REPLicant servers found")
 
@@ -94,6 +95,7 @@ function _select_entry(
     if !isempty(owning)
         deepest = maximum(length(_canonical(e.project)) for e in owning)
         scoped = filter(e -> length(_canonical(e.project)) == deepest, owning)
+        drop_gone && (scoped = _drop_gone(scoped))
         if !isempty(name)
             index = findfirst(e -> e.name == name, scoped)
             isnothing(index) &&
@@ -111,6 +113,7 @@ function _select_entry(
 
     if !isempty(name)
         named = filter(e -> e.name == name, candidates)
+        drop_gone && (named = _drop_gone(named))
         length(named) == 1 && return _warn_foreign(err, named[1], target)
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
@@ -141,14 +144,23 @@ end
 # Resolve a kill or restart target to its registry entry. Unlike eval, this reads the
 # raw registry without pinging, so a wedged server that cannot pong still resolves; an
 # explicit port must name a registered server, since both need its pid.
-function _kill_target(port::Integer, project::AbstractString, name::AbstractString)
+function _kill_target(
+        port::Integer, project::AbstractString, name::AbstractString; err::IO = stderr,
+    )
     entries = _read_entries()
     if port > 0
         index = findfirst(e -> e.port == port, entries)
         isnothing(index) && error("no REPLicant server registered on port $port")
         return entries[index]
     end
-    return _select_entry(entries, project, name)
+    return _select_entry(entries, project, name; err, drop_gone = true)
+end
+
+# `entries` without those whose servers are gone, or all of them when every one is.
+# A lone dead entry still resolves, so `kill` can report it gone and remove it.
+function _drop_gone(entries::Vector{RegistryEntry})
+    present = filter(e -> !_server_gone(e.port, e.pid), entries)
+    return isempty(present) ? entries : present
 end
 
 # Consume the value following a flag at `index`, erroring when the flag ends the
@@ -216,9 +228,10 @@ end
 # other mode is harmless: each caller reads only the fields it acts on.
 function _parse_args(args::Vector{String})
     values, bare, file, script_args = _tokenize_args(args)
-    port = haskey(values, "--port") ? _parse_port(values["--port"]) : -1
+    port = haskey(values, "--port") ? _parse_number(Int, values["--port"], in(1:65535), "--port") : -1
     timeout = haskey(values, "--timeout") ?
-        _parse_number(Float64, values["--timeout"], >(0), "--timeout") : nothing
+        _parse_number(Float64, values["--timeout"], t -> 0 < t < MAX_TIMEOUT_SECONDS, "--timeout") :
+        nothing
     head_lines = haskey(values, "--head-lines") ?
         _parse_number(Int, values["--head-lines"], >=(0), "--head-lines") : nothing
     tail_lines = haskey(values, "--tail-lines") ?
@@ -243,12 +256,6 @@ function _parse_args(args::Vector{String})
         tail_lines,
         force = !isempty(bare),
     )
-end
-
-function _parse_port(value::AbstractString)
-    port = tryparse(Int, value)
-    isnothing(port) && error("invalid --port: $value")
-    return port
 end
 
 # Parse a flag value as a number of type `T`, rejecting a non-number or one the
@@ -426,7 +433,7 @@ end
 # finds it.
 function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
-    entry = _kill_target(parsed.port, parsed.project, parsed.name)
+    entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
     pid = tryparse(Int, entry.pid)
     isnothing(pid) && error("registry entry for port $(entry.port) has no valid pid")
 
@@ -714,7 +721,7 @@ end
 # that and point at `kill --force` rather than claim a success that did not happen.
 function _interrupt_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
-    target = _resolve_port(parsed.port, parsed.project, parsed.name)
+    target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
     frame = _exchange(target, REQUEST_INTERRUPT, "")
     body = frame.body
     if frame.type == RESPONSE_ERR
@@ -748,7 +755,7 @@ const RESTART_SECONDS = 180
 # wedged on an eval. Waits for the new entry, which carries the same pid.
 function _restart_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
-    entry = _kill_target(parsed.port, parsed.project, parsed.name)
+    entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
     frame = _exchange(entry.port, REQUEST_RESTART, "")
     if frame.type == RESPONSE_ERR
         println(err, "replicant: $(frame.body)")

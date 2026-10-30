@@ -22,6 +22,16 @@ const REAL_ERR = Ref{IO}()
 # spawns.
 const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 
+# The open capture a write lands in. A task that outlives its eval still holds the
+# eval's closed sink, where writes vanish, so it falls through to the enclosing one.
+function _capture_target()
+    target = CAPTURE_TARGET[]
+    while target isa CaptureSink && !isopen(target)
+        target = target.outer
+    end
+    return target
+end
+
 # Routing stream installed via `redirect_stdout`/`redirect_stderr`, reading its
 # real stream from `real` (`REAL_OUT` for stdout, `REAL_ERR` for stderr).
 # `pipe_writer` returns that fd-backed stream so the redirect dups its fd unchanged;
@@ -33,18 +43,20 @@ const CAPTURE_TARGET = ScopedValue{Union{IO, Nothing}}(nothing)
 struct Router <: Base.AbstractPipe
     real::Base.RefValue{IO}
 end
-_routed(r::Router) = something(CAPTURE_TARGET[], r.real[])
+_routed(r::Router) = something(_capture_target(), r.real[])
 Base.pipe_writer(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 Base.pipe_reader(r::Router) = r.real[]  # dendro-ignore: duplicate -- forwarding accessor to the backing stream
 # When no capture target is bound, the write is the interactive REPL's, so it also
 # feeds the activity log's open human entry. A bound target is an agent eval, already
-# captured into its own file, so it never tees here.
+# captured into its own file, so it never tees here. Tested on the raw binding: a
+# task left over from an agent eval still holds its closed sink and is no human's.
+_human_output() = CAPTURE_TARGET[] === nothing
 function Base.unsafe_write(r::Router, p::Ptr{UInt8}, n::UInt)
-    CAPTURE_TARGET[] === nothing && _tee_human(p, n)
+    _human_output() && _tee_human(p, n)
     return unsafe_write(_routed(r), p, n)
 end
 function Base.write(r::Router, b::UInt8)
-    CAPTURE_TARGET[] === nothing && _tee_human(b)
+    _human_output() && _tee_human(b)
     return write(_routed(r), b)
 end
 Base.flush(r::Router) = flush(_routed(r))  # dendro-ignore: duplicate -- one-line delegation to the routed stream
@@ -57,14 +69,15 @@ Base.displaysize(r::Router) = displaysize(_routed(r))  # dendro-ignore: duplicat
 struct RouterDisplay <: Base.AbstractDisplay end
 
 function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
-    target = CAPTURE_TARGET[]
+    target = _capture_target()
     if target === nothing
         # No eval bound: the REPL is displaying a human result. Tee it into the open
         # activity entry, then decline so the REPL's own display still shows it.
-        _tee_human_display(x)
+        _human_output() && _tee_human_display(x)
         throw(MethodError(display, (d, M, x)))
     end
-    show(target, M, x)
+    # Limited like the REPL's own display, so a large array is elided.
+    show(IOContext(target, :limit => true), M, x)
     println(target)
     return nothing
 end
@@ -114,11 +127,9 @@ end
 # `redirect_stdout`/`redirect_stderr` dup the new stream's fd onto fd 1/2. Inside a
 # capture those fds belong to the capture, so hand them back to it.
 function _keep_capture_fds()
-    target = CAPTURE_TARGET[]
+    target = _capture_target()
     target isa CaptureSink || return nothing
-    Base._redirect_io_libc(target.file, 1)
-    Base._redirect_io_libc(target.file, 2)
-    return nothing
+    return _point_fds(target.file)
 end
 
 # The interactive REPL pushes its own display after routing is installed, and that
@@ -149,7 +160,8 @@ end
 # safe.
 struct CaptureSink <: IO
     file::IOStream
-    CaptureSink(file::IOStream) = new(file)
+    # The capture this one is nested in, which takes over once this one closes.
+    outer::Union{IO, Nothing}
 end
 function Base.unsafe_write(s::CaptureSink, p::Ptr{UInt8}, n::UInt)
     written = unsafe_write(s.file, p, n)
@@ -210,6 +222,18 @@ _spawn_stream(io) = io
 _fd_stream(io::IO) = io
 _fd_stream(io::Base.IOContext) = _fd_stream(io.io)
 
+# Dup `out` onto fd 1 and `err` onto fd 2. `_redirect_io_libc` is the primitive
+# `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle` handled
+# internally).
+function _point_fds(out::IO, err::IO = out)
+    Base._redirect_io_libc(out, 1)
+    Base._redirect_io_libc(err, 2)
+    return nothing
+end
+
+# Point fd 1/2 back at the streams routing replaced, undoing a capture's redirect.
+_restore_real_fds() = _point_fds(_fd_stream(REAL_OUT[]), _fd_stream(REAL_ERR[]))
+
 # Run `f` with its output captured, returning the captured text alongside the
 # value (or the thrown exception and its backtrace). InterruptException is rethrown
 # so long-running code stays interruptible.
@@ -232,14 +256,11 @@ function _capture(f)
 
     file = _capture_file()
     try
-        sink = CaptureSink(file)
-        outer = CAPTURE_TARGET[]
+        outer = _capture_target()
+        sink = CaptureSink(file, outer)
         # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
-        # those stay the routers. `_redirect_io_libc` is the primitive
-        # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle`
-        # handled internally).
-        Base._redirect_io_libc(file, 1)
-        Base._redirect_io_libc(file, 2)
+        # those stay the routers.
+        _point_fds(file)
         logger = Logging.ConsoleLogger(sink)
 
         value, errored, backtrace = with(CAPTURE_TARGET => sink) do
@@ -261,13 +282,7 @@ function _capture(f)
                     # rather than flushed to the terminal at process exit.
                     Base.Libc.flush_cstdio()
                     # A nested capture hands fd 1/2 back to the one around it.
-                    if outer isa CaptureSink
-                        Base._redirect_io_libc(outer.file, 1)
-                        Base._redirect_io_libc(outer.file, 2)
-                    else
-                        Base._redirect_io_libc(_fd_stream(REAL_OUT[]), 1)
-                        Base._redirect_io_libc(_fd_stream(REAL_ERR[]), 2)
-                    end
+                    outer isa CaptureSink ? _point_fds(outer.file) : _restore_real_fds()
                 end
             end
         end
@@ -289,6 +304,26 @@ end
 # Code evaluation.
 #
 
+# The REPL's soft scope rules, so a top-level loop assigns an existing global as it
+# does at the prompt. A copy of `REPL.softscope`, since a headless server has no REPL.
+function _softscope(@nospecialize ex)
+    if ex isa Expr
+        h = ex.head
+        if h === :toplevel
+            ex′ = Expr(h)
+            map!(_softscope, resize!(ex′.args, length(ex.args)), ex.args)
+            return ex′
+        elseif h in (:meta, :import, :using, :export, :module, :error, :incomplete, :thunk)
+            return ex
+        elseif h === :global && all(x -> isa(x, Symbol), ex.args)
+            return ex
+        else
+            return Expr(:block, Expr(:softscope, true), ex)
+        end
+    end
+    return ex
+end
+
 # Evaluate `code` in `mod`, formatting the result REPL-style and returning the
 # rendered text and whether evaluation (or formatting) errored. The `errored` flag
 # drives the response frame's type so the client can route failures and set its exit
@@ -300,7 +335,7 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
         return _help(query, mod)
     end
     try
-        thunk = () -> include_string(mod, code, "REPL[$id]")
+        thunk = () -> include_string(_softscope, mod, code, "REPL[$id]")
         # Capture stdout, stderr, logging, and the return value, giving us
         # REPL-like behavior. InterruptException is rethrown to allow
         # graceful interruption of long-running code. Run in the caller's directory

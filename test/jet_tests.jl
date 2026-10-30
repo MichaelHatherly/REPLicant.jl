@@ -66,8 +66,14 @@
         # `setup_stdio` call over the abstract real stream and its uncovered match.
         # `restart` adds its subcommand's keyword-NamedTuple `getfield` over
         # `out`/`err`, and the re-exec's `flush` of the global `stdout`/`stderr` and
-        # its failure `@error`.
-        SOUND_LIMIT = 718   # JET.report_package(REPLicant; mode = :sound)
+        # its failure `@error`. Reading a request in three steps (header, token, body)
+        # adds keyword `getfield`s to `_read_header`, `_read_body`, and the chunked
+        # `_discard_body`, plus `TruncatedFrame`'s field `convert`s. The rest are in
+        # the same categories: `CaptureSink`'s outer field, the single exit hook over
+        # `RUNNING_SERVERS`, the footer's `visible`/`max_rows`/`prompt_evaluating` over
+        # `Any` widths and the REPL backend, and keyword `getfield`s on `_cap`,
+        # `_kill_target`, and `repaint!`.
+        SOUND_LIMIT = 746   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

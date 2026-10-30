@@ -21,6 +21,10 @@
 
     @test_throws Exception REPLicant._parse_args(["--port=abc"])
     @test_throws Exception REPLicant._parse_args(["--port"])
+    # Not a port, so not silently "no port" either.
+    @test_throws Exception REPLicant._parse_args(["--port=0"])
+    @test_throws Exception REPLicant._parse_args(["--port=-1"])
+    @test_throws Exception REPLicant._parse_args(["--port=65536"])
     @test_throws Exception REPLicant._parse_args(["--bogus"])
 
     # Line-eliding flags parse to Ints; unset is nothing.
@@ -150,6 +154,9 @@ end
     @test_throws Exception REPLicant._parse_args(["--timeout=0"])
     @test_throws Exception REPLicant._parse_args(["--timeout=-1"])
     @test_throws Exception REPLicant._parse_args(["--timeout"])
+    # A bound the read timer cannot hold is refused before any request is sent.
+    @test_throws Exception REPLicant._parse_args(["--timeout=inf", "-e", "1"])
+    @test_throws Exception REPLicant._parse_args(["--timeout=1e300", "-e", "1"])
 end
 
 @testitem "client_timeout_frees_caller" tags = [:cli] setup = [Utilities] begin
