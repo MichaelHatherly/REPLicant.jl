@@ -67,14 +67,14 @@ end
 # Truncate `s` to `MAX_ENTRY_OUTPUT_BYTES`, cutting on a character boundary so the
 # stored string stays valid UTF-8. A chatty eval (an optimizer dumping thousands of
 # iteration lines) is bounded here rather than flooding the agent's context.
-function _cap(s::AbstractString)
+function _cap(s::AbstractString; label::String = "output")
     ncodeunits(s) <= MAX_ENTRY_OUTPUT_BYTES && return String(s)
     io = IOBuffer()
     for c in s
         position(io) + ncodeunits(c) > MAX_ENTRY_OUTPUT_BYTES && break
         print(io, c)
     end
-    return String(take!(io)) * "\n[output truncated]"
+    return String(take!(io)) * "\n[$label truncated]"
 end
 
 # The open entry's bytes as a valid string. The tee caps by raw byte count and can
@@ -97,7 +97,7 @@ end
 function _record_activity(source::Symbol, code::AbstractString, output::AbstractString, errored::Bool)
     isempty(strip(code)) && return nothing
     Base.@lock ACTIVITY_LOCK begin
-        push!(ACTIVITY_LOG, LogEntry(_next_seq(), source, Dates.now(), String(code), _cap(output), errored))
+        push!(ACTIVITY_LOG, LogEntry(_next_seq(), source, Dates.now(), _cap(code; label = "code"), _cap(output), errored))
         _evict!()
     end
     return nothing
@@ -113,7 +113,7 @@ function _record_repl_input(code::AbstractString)
     Base.@lock ACTIVITY_LOCK begin
         _finalize_open!()
         isempty(strip(code)) && return nothing
-        CURRENT_HUMAN_ENTRY[] = OpenEntry(_next_seq(), Dates.now(), String(code), UInt8[])
+        CURRENT_HUMAN_ENTRY[] = OpenEntry(_next_seq(), Dates.now(), _cap(code; label = "code"), UInt8[])
     end
     return nothing
 end

@@ -47,6 +47,24 @@ end
     @test REPLicant._cap("short") == "short"
 end
 
+@testitem "activity_code_capped" tags = [:activity] setup = [Utilities] begin
+    import REPLicant
+
+    # A large script sent as an eval, or pasted at the prompt, is held to the same
+    # bound as output, so the ring cannot grow to hundreds of MB.
+    Utilities.reset_activity()
+    code = repeat("x = 1\n", 10_000)
+    REPLicant._record_activity(:socket, code, "", false)
+    REPLicant._record_repl_input(code)
+    REPLicant._record_repl_input("done")
+    limit = REPLicant.MAX_ENTRY_OUTPUT_BYTES + ncodeunits("\n[code truncated]")
+    for entry in REPLicant.ACTIVITY_LOG
+        @test contains(entry.code, "code truncated")
+        @test ncodeunits(entry.code) <= limit
+    end
+    @test length(REPLicant.ACTIVITY_LOG) == 2
+end
+
 @testitem "activity_skips_empty_code" tags = [:activity] setup = [Utilities] begin
     import REPLicant
 
