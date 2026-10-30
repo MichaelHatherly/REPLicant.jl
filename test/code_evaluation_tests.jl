@@ -124,6 +124,14 @@ end
     @test contains(result.output, " 3\nafter")
 end
 
+@testitem "eval_display_is_limited" tags = [:code_evaluation] begin
+    # As at the REPL, a displayed array is elided rather than printed in full.
+    mod = Module()
+    result = REPLicant._evaluate("display(collect(1:100_000)); nothing", 1, mod, "")
+    @test contains(result.output, "⋮")
+    @test countlines(IOBuffer(result.output)) < 100
+end
+
 @testitem "eval_display_captured_under_a_later_display" tags = [:code_evaluation] begin
     # The interactive REPL pushes its own display after the server installs
     # routing; an eval's `display` must still reach the capture, not that display.

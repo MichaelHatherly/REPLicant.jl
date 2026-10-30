@@ -74,7 +74,8 @@ function Base.display(d::RouterDisplay, M::MIME"text/plain", x)
         _tee_human_display(x)
         throw(MethodError(display, (d, M, x)))
     end
-    show(target, M, x)
+    # Limited like the REPL's own display, so a large array is elided.
+    show(IOContext(target, :limit => true), M, x)
     println(target)
     return nothing
 end
