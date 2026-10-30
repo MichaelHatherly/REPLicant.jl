@@ -95,6 +95,17 @@ end
     end
 end
 
+@testitem "status_row_fits_code_after_giving_up_fields" tags = [:footer] begin
+    import REPLicant
+
+    # The fields given up free columns, and the running code takes them.
+    fields = [
+        :tag => "REPLicant", :port => ":5000", :project => "projectname",
+        :state => "busy 2s", :code => "sleep(6)",
+    ]
+    @test REPLicant._fit_status(fields, 36) == "REPLicant  :5000  busy 2s  sleep(6)"
+end
+
 @testitem "status_row_shows_the_running_code" tags = [:footer] setup = [Utilities] begin
     import Dates
     import REPLicant

@@ -70,14 +70,14 @@ function _fit_status(fields::Vector{Pair{Symbol, String}}, width::Integer)
     # The running code is last and the least pressing, so it takes whatever columns
     # the other fields leave, and is cut to them rather than costing any field.
     code = findfirst(pair -> first(pair) === :code, fields)
-    if !isnothing(code)
-        text = last(popat!(fields, code))
-        room = width - Footers.display_width(row()) - 2
-        room > 0 && push!(fields, :code => Footers.fit(text, room))
-    end
+    text = isnothing(code) ? nothing : last(popat!(fields, code))
     for key in STATUS_GIVE_UP
         Footers.display_width(row()) <= width && break
         filter!(pair -> first(pair) !== key, fields)
+    end
+    if !isnothing(text)
+        room = width - Footers.display_width(row()) - 2
+        room > 0 && push!(fields, :code => Footers.fit(text, room))
     end
     return row()
 end
