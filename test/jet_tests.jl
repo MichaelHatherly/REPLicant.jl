@@ -77,8 +77,13 @@
         # constructors' field `convert`s. Repairing the footer and prompt after a
         # resize adds the `widened` field's `convert`, the `invokelatest` results of
         # the REPL extension's input check and prompt redraw, and the `Function`-typed
-        # `on_height_loss` call in `repaint!`.
-        SOUND_LIMIT = 762   # JET.report_package(REPLicant; mode = :sound)
+        # `on_height_loss` call in `repaint!`. The client's `Output` stream forwards
+        # every write over its abstract `io` field, and its constructor adds a field
+        # `convert`. The precompile workload's typeasserts on the results of the
+        # top-level calls it dispatches at runtime add builtin throws, and its status
+        # row paint reaches `_duration`'s comparison over a `Real`. Passing the value
+        # to `_show_object` directly drops its `getproperty` pair.
+        SOUND_LIMIT = 771   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)
