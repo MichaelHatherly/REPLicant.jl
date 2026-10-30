@@ -81,6 +81,26 @@ function REPLicant.Footers.__install_keys(::Nothing)
     return true
 end
 
+# Read from the footer's task while the REPL's task edits the buffer. A keystroke
+# landing between this check and the erase blanks input from the screen, not from
+# the buffer, and the line editor redraws it on the next keystroke.
+function REPLicant.Footers.__input_at_end(::Nothing)
+    (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return true
+    mistate = Base.active_repl.mistate
+    mistate isa LineEdit.MIState || return true
+    return eof(LineEdit.buffer(mistate))
+end
+
+# Called from the footer's task, like `__input_at_end`, so a keystroke in the same
+# instant can race it and leave the line drawn twice until the next keystroke.
+function REPLicant.Footers.__redraw_prompt(::Nothing)
+    (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return nothing
+    mistate = Base.active_repl.mistate
+    mistate isa LineEdit.MIState || return nothing
+    LineEdit.refresh_line(mistate)
+    return nothing
+end
+
 #
 # Activity log: capture human-typed input into the log, so an agent sharing the
 # session sees what was run at the prompt.

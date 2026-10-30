@@ -174,6 +174,10 @@ end
     @test F.paint(0, String[], 24, 80; force_region = true) == "\e7" * "\e[1;24r" * "\e8"
 
     @test F.paint(1, ["abcdef"], 24, 3) == "\e7" * "\e[24;1Habc\e[0m\e[K" * "\e8"
+
+    # Erasing below the cursor starts at the saved position, before anything moves it.
+    @test F.paint(1, ["a"], 24, 80; force_region = true, clear_below = true) ==
+        "\e7" * "\e[J" * "\e[1;23r" * "\e[24;1Ha\e[0m\e[K" * "\e8"
 end
 
 @testitem "footer_clear_region_sequence" tags = [:footer] setup = [FooterHarness] begin
@@ -366,6 +370,90 @@ end
     @test written(grown_buf) ==
         "\e7\e[1;22r" * "\e[19;1H\e[K\e[20;1H\e[K" *
         "\e[23;1Hone\e[0m\e[K\e[24;1Htwo\e[0m\e[K" * "\e8"
+end
+
+@testitem "footer_clears_below_the_prompt_after_a_widen" tags = [:footer] setup = [FooterHarness] begin
+    F = FooterHarness.F
+    harness, resize, written = FooterHarness.harness, FooterHarness.resize, FooterHarness.written
+
+    footer, buf = harness(24, 80)
+    F.set!(:a, "one", footer)
+    F.repaint!(footer)
+    take!(buf)
+
+    # A terminal that rejoins wrapped lines when it widens can lift the old footer
+    # into the blank rows below the prompt. The erase waits for the cursor to sit at
+    # the end of the input, where nothing below it belongs to the human.
+    resize(footer, 24, 120)
+    F.repaint!(footer; input_at_end = false)
+    @test !occursin("\e[J", written(buf))
+    F.repaint!(footer; input_at_end = true)
+    @test startswith(written(buf), "\e7\e[J")
+    F.repaint!(footer; input_at_end = true)
+    @test !occursin("\e[J", written(buf))
+
+    # Narrowing lifts nothing.
+    resize(footer, 24, 100)
+    F.repaint!(footer; input_at_end = true)
+    @test !occursin("\e[J", written(buf))
+end
+
+@testitem "footer_redraws_the_prompt_after_losing_height" tags = [:footer] setup = [FooterHarness] begin
+    F, harness, resize = FooterHarness.F, FooterHarness.harness, FooterHarness.resize
+
+    footer, _ = harness(47, 100)
+    F.set!(:a, "one", footer)
+    F.repaint!(footer)
+    redraws = Ref(0)
+    redraw() = (redraws[] += 1; nothing)
+
+    # A terminal losing height keeps its bottom fixed, and the footer's row stops it
+    # trimming the blank rows below the prompt first, so the prompt scrolls off the
+    # top. The line editor redraws it at the cursor, once the prompt's eval is over.
+    resize(footer, 24, 100)
+    F.repaint!(footer; paused = true, on_height_loss = redraw)
+    @test redraws[] == 0
+    F.repaint!(footer; on_height_loss = redraw)
+    @test redraws[] == 1
+    F.repaint!(footer; on_height_loss = redraw)
+    @test redraws[] == 1
+
+    # Gaining height scrolls nothing away.
+    resize(footer, 47, 100)
+    F.repaint!(footer; on_height_loss = redraw)
+    @test redraws[] == 1
+end
+
+@testitem "footer_upkeep_erases_once_the_input_is_at_its_end" tags = [:footer] begin
+    import REPLicant
+
+    # An erase deferred because the cursor was mid-edit is taken by the next upkeep
+    # tick after the cursor reaches the end, not left for the next eval. A fresh
+    # process keeps the stand-in input state out of this one.
+    script = """
+    using REPLicant
+    F = REPLicant.Footers
+    at_end = Ref(false)
+    @eval F.__input_at_end(::Nothing) = \$at_end[]
+    buf = IOBuffer()
+    footer = F.Footer(IOContext(buf, :displaysize => (24, 80)))
+    footer.enabled = true
+    F.set!(:a, "one", footer)
+    F.repaint!(footer)
+    footer.io = IOContext(buf, :displaysize => (24, 120))
+    F.repaint!(footer)
+    footer.disturbed = false
+    take!(buf)
+    @async F.dispatch(footer)
+    @async F.upkeep(footer)
+    sleep(4 * F.UPKEEP_TICK)
+    deferred = !occursin("\\e[J", String(take!(buf)))
+    at_end[] = true
+    sleep(4 * F.UPKEEP_TICK)
+    print(deferred && occursin("\\e[J", String(take!(buf))))
+    """
+    cmd = `$(Base.julia_cmd()) --project=$(pkgdir(REPLicant)) --startup-file=no -e $script`
+    @test read(pipeline(cmd; stderr = devnull), String) == "true"
 end
 
 @testitem "footer_sections_keep_their_order" tags = [:footer] setup = [FooterHarness] begin
