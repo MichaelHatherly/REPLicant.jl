@@ -40,6 +40,14 @@ end
     @test strip(result.output) == "30"
 end
 
+@testitem "eval_uses_repl_soft_scope" tags = [:code_evaluation] begin
+    # As at the REPL, a top-level loop assigns the existing global.
+    mod = Module()
+    result = REPLicant._evaluate("x = 0; for i in 1:3; x += i; end; x", 1, mod, "")
+    @test !result.errored
+    @test strip(result.output) == "6"
+end
+
 @testitem "eval_function_definition" tags = [:code_evaluation] begin
     mod = Module()
     code = """

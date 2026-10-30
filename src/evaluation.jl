@@ -289,6 +289,26 @@ end
 # Code evaluation.
 #
 
+# The REPL's soft scope rules, so a top-level loop assigns an existing global as it
+# does at the prompt. A copy of `REPL.softscope`, since a headless server has no REPL.
+function _softscope(@nospecialize ex)
+    if ex isa Expr
+        h = ex.head
+        if h === :toplevel
+            ex′ = Expr(h)
+            map!(_softscope, resize!(ex′.args, length(ex.args)), ex.args)
+            return ex′
+        elseif h in (:meta, :import, :using, :export, :module, :error, :incomplete, :thunk)
+            return ex
+        elseif h === :global && all(x -> isa(x, Symbol), ex.args)
+            return ex
+        else
+            return Expr(:block, Expr(:softscope, true), ex)
+        end
+    end
+    return ex
+end
+
 # Evaluate `code` in `mod`, formatting the result REPL-style and returning the
 # rendered text and whether evaluation (or formatting) errored. The `errored` flag
 # drives the response frame's type so the client can route failures and set its exit
@@ -300,7 +320,7 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
         return _help(query, mod)
     end
     try
-        thunk = () -> include_string(mod, code, "REPL[$id]")
+        thunk = () -> include_string(_softscope, mod, code, "REPL[$id]")
         # Capture stdout, stderr, logging, and the return value, giving us
         # REPL-like behavior. InterruptException is rethrown to allow
         # graceful interruption of long-running code. Run in the caller's directory
