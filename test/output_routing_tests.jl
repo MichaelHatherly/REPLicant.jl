@@ -42,6 +42,33 @@ end
     end
 end
 
+@testitem "closing_one_server_keeps_routing_for_the_rest" tags = [:output_routing] setup = [Utilities] begin
+    import REPLicant
+
+    # Routing is installed once per process, so a test server closing inside a warm
+    # session must leave it to the session's own server.
+    Utilities.withproject() do start, _
+        closing, _ = start()
+        start()
+        Utilities.wait_closed(closing)
+        @test stdout isa REPLicant.Router
+    end
+end
+
+@testitem "routing_change_inside_capture_keeps_fds_on_capture" tags = [:output_routing] begin
+    import REPLicant
+
+    # Rebinding the global streams dups their fds onto fd 1/2, which inside a
+    # capture belong to it.
+    outer = REPLicant._capture() do
+        REPLicant._uninstall_routing!()
+        REPLicant._install_routing!()
+        run(`echo after-reroute`)
+        nothing
+    end
+    @test contains(outer.output, "after-reroute")
+end
+
 @testitem "uninstall_routing_pops_its_own_display" tags = [:output_routing] begin
     import REPLicant
 
@@ -56,5 +83,7 @@ end
         @test !any(d -> d isa REPLicant.RouterDisplay, Base.Multimedia.displays)
     finally
         filter!(d -> d !== repl_display, Base.Multimedia.displays)
+        # Hand routing back, as a warm session's own server still relies on it.
+        REPLicant._install_routing!()
     end
 end

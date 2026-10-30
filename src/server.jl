@@ -207,7 +207,7 @@ function _server(srv::Server)
     server, port_number, entry_path = _listen_and_register!(srv)
     # Route output per eval so a remote eval's output is captured while the
     # interactive REPL's still reaches the terminal.
-    _install_routing!()
+    _acquire_routing!(srv)
     # Capture human-typed activity into the log (a no-op without an interactive REPL).
     _install_activity_capture()
     # Signal readiness now that the registry entry exists.
@@ -293,9 +293,9 @@ function _serve(server, srv::Server, entry_path)
 end
 
 # Close the listener, drop this process's handle, and remove the registry entry.
-function _shutdown_server(listener, srv, entry_path)
+function _shutdown_server(listener, srv::Server, entry_path)
     close(listener)
-    _uninstall_routing!()
+    _release_routing!(srv)
     return _unregister!(srv, entry_path)
 end
 
