@@ -128,6 +128,34 @@ Base.flush(s::CaptureSink) = flush(s.file)
 # `ConsoleLogger` falls back to `stderr` when its stream reports closed.
 Base.isopen(s::CaptureSink) = isopen(s.file)
 
+# A fresh read-write file for one eval's output that leaves nothing behind when its
+# last descriptor closes, even when `kill --force` ends a runaway eval and skips every
+# `finally`. Unix unlinks it at once. Windows refuses to unlink an open file, so it is
+# opened delete-on-close instead.
+function _capture_file()
+    @static if Sys.iswindows()
+        path = tempname()
+        GENERIC_READ_WRITE = 0x80000000 | 0x40000000
+        FILE_SHARE_ALL = 0x00000001 | 0x00000002 | 0x00000004
+        CREATE_NEW = 0x00000001
+        TEMPORARY_DELETE_ON_CLOSE = 0x00000100 | 0x04000000
+        handle = ccall(
+            :CreateFileW, stdcall, Ptr{Cvoid},
+            (Cwstring, UInt32, UInt32, Ptr{Cvoid}, UInt32, UInt32, Ptr{Cvoid}),
+            path, GENERIC_READ_WRITE, FILE_SHARE_ALL, C_NULL, CREATE_NEW,
+            TEMPORARY_DELETE_ON_CLOSE, C_NULL,
+        )
+        handle == Ptr{Cvoid}(typemax(UInt)) && Base.windowserror(:CreateFileW, true)
+        O_BINARY = 0x8000
+        fd = ccall(:_open_osfhandle, Cint, (Ptr{Cvoid}, Cint), handle, O_BINARY)
+        return fdio(path, fd, true)
+    else
+        path, file = mktemp()
+        rm(path)
+        return file
+    end
+end
+
 # The stream a child process handed the router writes to: the capture's file
 # itself, whose fd it inherits, so its output stays in order with the eval's.
 _spawn_stream(s::CaptureSink) = s.file
@@ -160,12 +188,8 @@ function _capture(f)
     _install_routing!()
     _raise_router_display!()
 
-    path, file = mktemp()
+    file = _capture_file()
     try
-        # Drop the name at once where the OS allows it, so a server killed mid-eval
-        # (`kill --force` on a runaway loop) leaves no output behind on disk or in a
-        # tmpfs. Windows refuses to unlink an open file; the `finally` removes it.
-        Sys.iswindows() || rm(path)
         sink = CaptureSink(file)
         outer = CAPTURE_TARGET[]
         # Redirect only the raw fds, not the global `stdout`/`stderr` bindings:
@@ -216,7 +240,6 @@ function _capture(f)
         )
     finally
         close(file)
-        rm(path; force = true)
     end
 end
 

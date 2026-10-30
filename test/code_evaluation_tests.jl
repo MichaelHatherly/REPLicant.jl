@@ -213,16 +213,22 @@ end
     @test contains(result.output, " rc=0")
 end
 
-@testitem "eval_capture_file_is_unlinked" tags = [:code_evaluation] begin
-    mod = Module()
-    # With no name, the kernel frees the output when the last descriptor closes, so
-    # a server killed mid-eval leaves nothing behind. Windows can't unlink an open
-    # file.
-    if Sys.iswindows()
-        @test true skip = true
-    else
-        result = REPLicant._evaluate("stat(RawFD(1)).nlink", 1, mod, "")
-        @test strip(result.output) == "0"
+@testitem "killed_capture_leaves_no_file" tags = [:code_evaluation] begin
+    # `kill --force` on a runaway eval skips every `finally`; the capture's file
+    # must go with the process. `_exit` stands in for the kill.
+    mktempdir() do tmp
+        script = """
+        import REPLicant
+        REPLicant._capture() do
+            print("doomed output")
+            ccall(:_exit, Cvoid, (Cint,), 3)
+        end
+        """
+        env = merge(ENV, Dict("TMPDIR" => tmp, "TMP" => tmp, "TEMP" => tmp))
+        cmd = `$(Base.julia_cmd()) --project=$(pkgdir(REPLicant)) --startup-file=no -e $script`
+        proc = run(setenv(ignorestatus(cmd), env))
+        @test proc.exitcode == 3
+        @test isempty(readdir(tmp))
     end
 end
 
