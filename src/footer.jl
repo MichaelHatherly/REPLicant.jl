@@ -355,8 +355,17 @@ mutable struct Footer
     started::Bool
     wake::Base.Event
     lock::ReentrantLock
+    # Content that changes on its own clock, rather than only when something calls
+    # `set!`: an elapsed time counting up, a progress figure read from elsewhere. The
+    # predicate is consulted on every upkeep tick and a repaint follows while it
+    # holds, which is how a section can tick without this module knowing what it is
+    # showing.
+    live::Union{Nothing, Base.Callable}
+    # Set by `disturbed!`, cleared by the upkeep tick that repaints.
+    disturbed::Bool
 end
 
+# `disturbed` starts set so the first tick paints, whatever brought the footer up.
 Footer(io::IO) = Footer(
     io,
     Pair{Any, Section}[],
@@ -366,15 +375,11 @@ Footer(io::IO) = Footer(
     false,
     Base.Event(true),
     ReentrantLock(),
+    nothing,
+    true,
 )
 
 const FOOTER = Footer(stdout)
-
-# Content that changes on its own clock, rather than only when something calls
-# `set!`: an elapsed time counting up, a progress figure read from elsewhere. The
-# predicate is consulted on every upkeep tick and a repaint follows while it holds,
-# which is how a section can tick without this module knowing what it is showing.
-const LIVE = Ref{Union{Nothing, Base.Callable}}(nothing)
 
 """
     live!(predicate)
@@ -382,8 +387,8 @@ const LIVE = Ref{Union{Nothing, Base.Callable}}(nothing)
 Repaint on every upkeep tick for as long as `predicate` returns true. Pass
 `nothing` to stop.
 """
-function live!(predicate::Union{Nothing, Base.Callable})
-    LIVE[] = predicate
+function live!(predicate::Union{Nothing, Base.Callable}, footer::Footer = FOOTER)
+    footer.live = predicate
     return nothing
 end
 
@@ -603,8 +608,6 @@ end
 const UPKEEP_TICK = 0.5
 const IDLE_REPAINT = 30.0
 const EVAL_HOOKED = Ref(false)
-# Starts set so the first tick paints, whatever brought the footer up.
-const EVALUATED = Ref(true)
 
 """
     disturbed!()
@@ -613,8 +616,8 @@ Note that something which could have damaged the footer has happened, so that th
 next upkeep tick repaints. Cheaper than [`refresh!`](@ref) for an event that
 arrives often and does not need the screen right now.
 """
-function disturbed!()
-    EVALUATED[] = true
+function disturbed!(footer::Footer = FOOTER)
+    footer.disturbed = true
     return nothing
 end
 
@@ -641,14 +644,14 @@ end
 awaiting_input(channel::Channel) = !isempty(channel.cond_take.waitq)
 awaiting_input(::Any) = false
 
-function install_eval_hook!()
+function install_eval_hook!(footer::Footer)
     EVAL_HOOKED[] && return true
     backend = repl_backend()
     backend === nothing && return false
     hasproperty(backend, :ast_transforms) || return false
     # Applied with `invokelatest`, so a closure pushed from here is safe to call
     # from the backend task that was already running when it was made.
-    push!(backend.ast_transforms, ast -> (disturbed!(); ast))
+    push!(backend.ast_transforms, ast -> (disturbed!(footer); ast))
     EVAL_HOOKED[] = true
     return true
 end
@@ -657,15 +660,15 @@ function upkeep(footer::Footer)
     healed = time()
     while true
         sleep(UPKEEP_TICK)
-        install_eval_hook!()
+        install_eval_hook!(footer)
         # The REPL extension can load after this task started, in a newer world.
         Base.invokelatest(__install_keys, nothing)
         # The hook fires before the prompt's eval runs; repair once it has returned.
         (footer.enabled && !prompt_evaluating()) || continue
-        evaluated = EVALUATED[]
-        evaluated && (EVALUATED[] = false)
-        live = LIVE[]
-        if evaluated || time() - healed >= IDLE_REPAINT
+        disturbed = footer.disturbed
+        disturbed && (footer.disturbed = false)
+        live = footer.live
+        if disturbed || time() - healed >= IDLE_REPAINT
             Base.@lock footer.lock footer.stale = true
             notify(footer.wake)
             healed = time()
