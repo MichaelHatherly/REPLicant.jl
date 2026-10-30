@@ -99,6 +99,24 @@ end
     end
 end
 
+@testitem "closed_servers_leave_no_exit_hooks" setup = [Utilities] tags = [:server_lifecycle] begin
+    import REPLicant
+
+    # A warm session that runs this suite starts and closes many servers. Each one
+    # left an exit hook holding it, which at exit removed whatever entry by then sat
+    # on its old port, even another process's.
+    Utilities.withproject() do start, registry
+        server, _ = start()
+        Utilities.wait_closed(server)
+        hooks = length(Base.atexit_hooks)
+        for _ in 1:3
+            server, _ = start()
+            Utilities.wait_closed(server)
+        end
+        @test length(Base.atexit_hooks) == hooks
+    end
+end
+
 @testitem "label_cleared_beside_unlabeled_server" setup = [Utilities] tags =
     [:server_lifecycle] begin
     import REPLicant

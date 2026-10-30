@@ -238,20 +238,35 @@ function _listen_and_register!(srv::Server)
     srv.started = started
     srv.verbose && @info "REPLicant listening" port_number project entry_path
 
-    # Ensure cleanup happens even if the Julia process is terminated. A restart keeps
-    # the listener open: closing it ends the server task, and a script blocked on
-    # that task would return and exit the process before the re-exec.
-    atexit() do
+    Base.@lock RUNNING_LOCK begin
+        RUNNING_SERVERS[srv] = (server, entry_path)
+        EXIT_HOOKED[] || (atexit(_exit_cleanup); EXIT_HOOKED[] = true)
+    end
+
+    return server, port_number, entry_path
+end
+
+# The servers still running in this process, with the listener and registry entry
+# exit has to clean up for each. One exit hook serves them all, and a server leaves
+# on shutdown, so a closed server's old port is never unregistered at exit.
+const RUNNING_SERVERS = IdDict{Server, Tuple{Sockets.TCPServer, String}}()
+const RUNNING_LOCK = ReentrantLock()
+const EXIT_HOOKED = Ref(false)
+
+# Clean up after every running server as the process exits. A restart keeps the
+# listener open: closing it ends the server task, and a script blocked on that task
+# would return and exit the process before the re-exec.
+function _exit_cleanup()
+    for (srv, (listener, entry_path)) in Base.@lock(RUNNING_LOCK, collect(RUNNING_SERVERS))
         try
             RESTARTING[] ? _unregister!(srv, entry_path) :
-                _shutdown_server(server, srv, entry_path)
+                _shutdown_server(listener, srv, entry_path)
         catch error
             # Use @debug to avoid noise during forced shutdowns
             @debug "Error during shutdown" error
         end
     end
-
-    return server, port_number, entry_path
+    return nothing
 end
 
 # Run the accept loop with its worker, draining and shutting down on exit.
@@ -294,7 +309,7 @@ end
 const SHUTTING_DOWN = "Server shutting down"
 
 # Answer a request the closing server will not evaluate.
-function _refuse_shutting_down(request::ClientRequest, active_connections)
+function _refuse_shutting_down(request::ClientRequest, active_connections::Threads.Atomic{Int})
     try
         _write_frame(request.socket, RESPONSE_ERR, SHUTTING_DOWN)
     catch error
@@ -308,6 +323,7 @@ end
 
 # Close the listener, drop this process's handle, and remove the registry entry.
 function _shutdown_server(listener, srv::Server, entry_path)
+    Base.@lock RUNNING_LOCK delete!(RUNNING_SERVERS, srv)
     close(listener)
     _release_routing!(srv)
     return _unregister!(srv, entry_path)
