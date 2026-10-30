@@ -45,15 +45,24 @@
                 for (index, args) in enumerate(client_commands(port))
                     trace = joinpath(tmp, "client-$index.txt")
                     command = setenv(`$julia --trace-compile=$trace $client $args`, env; dir = work)
-                    run(pipeline(ignorestatus(command); stdin = devnull, stdout = devnull, stderr = devnull))
-                    push!(clients, args => owned_compiles(trace))
+                    finished = finishes(pipeline(ignorestatus(command); stdin = devnull, stdout = devnull, stderr = devnull))
+                    push!(clients, args => finished ? owned_compiles(trace) : ["timed out"])
                 end
-                wait(proc)
+                finishes(proc) || return (; clients, server = ["did not exit"; readlines(log)])
             finally
                 process_running(proc) && kill(proc, Base.SIGKILL)
             end
             (; clients, server = owned_compiles(server_trace))
         end
+    end
+
+    # Whether a process exits within the deadline, killing it if not, so a hang
+    # fails the test with what was stuck.
+    finishes(command::Base.AbstractCmd) = finishes(run(command; wait = false))
+    function finishes(proc::Base.Process)
+        timedwait(() -> !process_running(proc), 300) === :ok && return true
+        kill(proc, Base.SIGKILL)
+        return false
     end
 
     function wait_for_port(registry, proc)
