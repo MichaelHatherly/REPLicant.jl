@@ -96,7 +96,9 @@ function _write_registry_entry(
         open(temp, "w") do io
             write(io, _registry_entry(port, project; token, name, started))
         end
-        mv(temp, path; force = true)
+        # `rename` replaces in one step. Before Julia 1.12, `mv(; force)` removes the
+        # old entry first, so a concurrent reader could find none.
+        Base.Filesystem.rename(temp, path)
     catch error
         isfile(temp) && rm(temp; force = true)
         rethrow(error)

@@ -73,3 +73,34 @@ end
         end
     end
 end
+
+@testitem "registry_rewrite_never_hides_entry" tags = [:registry] begin
+    import REPLicant
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            path = REPLicant._write_registry_entry(9001, "/work/a"; token = "")
+            stop = joinpath(registry, "stop")
+            # Another process, so the reader runs concurrently with the rewrites
+            # whatever the thread count.
+            script = """
+            function count_misses()
+                misses = 0
+                println("ready"); flush(stdout)
+                while !isfile($(repr(stop)))
+                    isfile($(repr(path))) || (misses += 1)
+                end
+                return misses
+            end
+            print(count_misses())
+            """
+            reader = open(`$(Base.julia_cmd()) --startup-file=no -e $script`; read = true)
+            @test readline(reader) == "ready"
+            for _ in 1:2000
+                REPLicant._write_registry_entry(9001, "/work/a"; token = "", name = "x")
+            end
+            touch(stop)
+            @test read(reader, String) == "0"
+        end
+    end
+end
