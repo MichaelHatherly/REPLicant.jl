@@ -29,6 +29,23 @@ end
     end
 end
 
+@testitem "wrong_token_rejected_before_body_is_read" tags = [:protocol, :token] begin
+    # A peer without the token must not get the server to buffer the body it
+    # announces, up to 16MB per connection. The token is checked as it arrives.
+    body = string(REPLicant._new_token(), repeat("x", 1024 * 1024))
+    frame = IOBuffer()
+    REPLicant._write_frame(frame, REPLicant.REQUEST_EVAL, body)
+    read_wrong_token(io) =
+    try
+        REPLicant._read_request(seekstart(io), REPLicant._new_token(), 5.0)
+    catch error
+        error
+    end
+    read_wrong_token(frame)
+    @test read_wrong_token(frame) isa REPLicant.Unauthorized
+    @test @allocated(read_wrong_token(frame)) < 256 * 1024
+end
+
 @testitem "ping_without_token_reads_as_dead" tags = [:protocol, :token] setup = [Utilities] begin
     Utilities.withserver() do server, mod, port
         frame = Utilities.requestframe(port, REPLicant.REQUEST_PING, ""; token = "")

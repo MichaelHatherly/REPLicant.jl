@@ -161,17 +161,42 @@ _write_request(io::IO, token::String, type::UInt8, body::String) =
 
 # Read a request frame and check its token, returning the frame with the token
 # stripped from its body. The comparison runs in constant time.
+#
+# The token is read and checked before the rest of the body, so a peer without it
+# cannot make the server buffer the body its header announces. The rest is still
+# drained before the rejection, so the client finishes its write and reads it.
 function _read_request(sock::IO, token::String, timeout_seconds::Float64)
-    frame = _read_frame(sock, REQUEST_TYPES; timeout_seconds)
-    isnothing(frame) && return nothing
-    bytes = codeunits(frame.body)
-    length(bytes) >= TOKEN_LENGTH || throw(Unauthorized())
+    header = _read_header(sock, REQUEST_TYPES; timeout_seconds, max_bytes = MAX_REQUEST_BYTES)
+    isnothing(header) && return nothing
+    type, count = header
+    if count < TOKEN_LENGTH
+        _discard_body(sock, count; timeout_seconds)
+        throw(Unauthorized())
+    end
+    presented = _read_body(sock, TOKEN_LENGTH; timeout_seconds)
     mismatch = 0x00
-    for (actual, expected) in zip(bytes, codeunits(token))
+    for (actual, expected) in zip(presented, codeunits(token))
         mismatch |= actual ⊻ expected
     end
-    mismatch == 0x00 || throw(Unauthorized())
-    return (; frame.type, body = String(bytes[(TOKEN_LENGTH + 1):end]))
+    if mismatch != 0x00
+        _discard_body(sock, count - TOKEN_LENGTH; timeout_seconds)
+        throw(Unauthorized())
+    end
+    return (; type, body = String(_read_body(sock, count - TOKEN_LENGTH; timeout_seconds)))
+end
+
+# Read and drop `count` body bytes a chunk at a time, holding no more than one chunk.
+function _discard_body(sock::IO, count::Int; timeout_seconds)
+    chunk = Vector{UInt8}(undef, min(count, 64 * 1024))
+    remaining = count
+    while remaining > 0
+        n = min(remaining, length(chunk))
+        _read_with_timeout(sock; timeout_seconds) do
+            readbytes!(sock, chunk, n)
+        end == n || error("Incomplete frame: expected $count body bytes")
+        remaining -= n
+    end
+    return nothing
 end
 
 # Connect to the server on `port` and send one request carrying its registered
@@ -215,30 +240,41 @@ function _read_frame(
         timeout_seconds = READ_TIMEOUT_SECONDS,
         max_bytes::Int = MAX_REQUEST_BYTES,
     )
+    header = _read_header(sock, valid_types; timeout_seconds, max_bytes)
+    isnothing(header) && return nothing
+    type, count = header
+    return (; type, body = String(_read_body(sock, count; timeout_seconds)))
+end
+
+# Read and validate a frame header, returning `(type, body_length)`, or `nothing`
+# when the peer closed without sending.
+function _read_header(sock::IO, valid_types::Tuple{Vararg{UInt8}}; timeout_seconds, max_bytes::Int)
     header = _read_with_timeout(sock; timeout_seconds) do
         read(sock, FRAME_HEADER_BYTES)
     end::Vector{UInt8}
     isempty(header) && return nothing
     length(header) == FRAME_HEADER_BYTES ||
         error("Incomplete frame header: expected $FRAME_HEADER_BYTES bytes, got $(length(header))")
+    return _parse_header(header, valid_types, max_bytes)
+end
 
-    type, count = _parse_header(header, valid_types, max_bytes)
-    count == 0 && return (; type, body = "")
-
+# Read exactly `count` body bytes.
+function _read_body(sock::IO, count::Int; timeout_seconds)
+    count == 0 && return UInt8[]
     body = _read_with_timeout(sock; timeout_seconds) do
         read(sock, count)
     end::Vector{UInt8}
     length(body) == count ||
         error("Incomplete frame: expected $count body bytes, got $(length(body))")
-    return (; type, body = String(body))
+    return body
 end
 
 # Drain the client's framed request before replying so it completes its write and
 # reads the rejection, rather than hitting EPIPE on flush against a socket we
-# already closed.
-function _reject_at_capacity(sock::IO, id, read_timeout_seconds)
+# already closed. A peer without the token is dropped once its token fails.
+function _reject_at_capacity(sock::IO, id, token::String, read_timeout_seconds)
     return try
-        _read_frame(sock, REQUEST_TYPES; timeout_seconds = read_timeout_seconds)
+        _read_request(sock, token, read_timeout_seconds)
         _write_frame(sock, RESPONSE_ERR, "Server at capacity, please retry")
     catch error
         @debug "Failed to send capacity error to client" id error

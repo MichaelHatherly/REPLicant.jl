@@ -418,7 +418,7 @@ function _admit(
         srv.verbose && @warn "Connection rejected - server at capacity" id current =
             active_connections[] max = srv.max_connections
         # Reject off the accept loop so draining the request never blocks accepting.
-        @async _reject_at_capacity(sock, id, srv.read_timeout_seconds)
+        @async _reject_at_capacity(sock, id, srv.token, srv.read_timeout_seconds)
     else
         Threads.atomic_add!(active_connections, 1)
         srv.verbose &&
