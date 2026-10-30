@@ -4,19 +4,16 @@
     mod = Main
 
     # Simple value
-    result = (value = 42, error = false, output = "")
-    REPLicant._show_object(buffer, result, mod)
+    REPLicant._show_object(buffer, 42, mod)
     @test String(take!(buffer)) == "42"
 
     # Array
-    result = (value = [1, 2, 3], error = false, output = "")
-    REPLicant._show_object(buffer, result, mod)
+    REPLicant._show_object(buffer, [1, 2, 3], mod)
     output = String(take!(buffer))
     @test contains(output, "3-element Vector{Int64}")
 
     # Custom type
-    result = (value = Dict(:a => 1), error = false, output = "")
-    REPLicant._show_object(buffer, result, mod)
+    REPLicant._show_object(buffer, Dict(:a => 1), mod)
     output = String(take!(buffer))
     @test contains(output, "Dict{Symbol, Int64}")
 end

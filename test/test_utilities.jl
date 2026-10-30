@@ -111,8 +111,8 @@
     # `func(port, pid)` against the live process. The subprocess is killed on exit;
     # returns the entry path so a test can assert it was cleaned up. Used by kill
     # tests, which must target a process other than the test runner. The server
-    # prints `server up` to `out` once it listens.
-    function spawn_server(func, registry, work; out = devnull)
+    # prints `server up` to `out` once it listens, and its stderr goes to `err`.
+    function spawn_server(func, registry, work; out = devnull, err = devnull)
         script = """
         using REPLicant; s = REPLicant.Server(); take!(s.channel)
         println("server up"); flush(stdout); wait(s.task)
@@ -125,7 +125,7 @@
             env;
             dir = work,
         )
-        proc = run(pipeline(cmd; stdout = out, stderr = devnull); wait = false)
+        proc = run(pipeline(cmd; stdout = out, stderr = err); wait = false)
         return try
             entry_path = _wait_for_entry(registry)
             fields = REPLicant._parse_registry_entry(entry_path)

@@ -34,9 +34,11 @@ does.
 - **Out of the project's dependencies.** REPLicant lives in the global
   environment like Revise, never a direct dep of the project under work. The
   client runs with no `--project` and resolves `using REPLicant` from there.
-- **Pay latency at build time.** `@compile_workload` precompiles the client and
-  the server's socket handling, so first-call JIT cost lands at build time, not
-  on the user.
+- **Pay latency at build time.** The `@compile_workload` runs a live server and
+  every client command against it, and each extension reruns it, since an
+  extension's methods invalidate the package code that calls its hooks. First-call
+  JIT cost lands at build time, not on the user. `test/precompile_tests.jl` fails
+  when a client or server compiles REPLicant code at runtime.
 
 ## Architecture
 

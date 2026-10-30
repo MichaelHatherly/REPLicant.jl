@@ -20,4 +20,6 @@ function REPLicant.__revise(::Nothing, f, args...; kws...)
     return @invokelatest f(args...; kws...)
 end
 
+REPLicant.PrecompileTools.@compile_workload REPLicant._run_workload()
+
 end

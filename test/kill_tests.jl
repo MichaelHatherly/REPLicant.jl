@@ -144,6 +144,28 @@ end
     end
 end
 
+@testitem "kill_shuts_down_server_without_a_signal" tags = [:kill] setup = [Utilities] begin
+    import REPLicant
+
+    # A SIGTERM makes Julia print a backtrace to the server's terminal and run its
+    # exit hooks from wherever the main thread was, which can hang inside libuv.
+    mktempdir() do registry
+        mktempdir() do work
+            log = joinpath(work, "server.log")
+            entry_path = Utilities.spawn_server(registry, work; err = log) do port, pid
+                out = IOBuffer()
+                withenv("REPLICANT_DIR" => registry) do
+                    @test REPLicant._kill_server(["--port=$port"]; out) == 0
+                end
+                @test contains(String(take!(out)), "shut down")
+                @test !REPLicant._process_alive(pid)
+            end
+            @test !isfile(entry_path)
+            @test !contains(read(log, String), "signal")
+        end
+    end
+end
+
 @testitem "kill_reports_surviving_process" tags = [:kill] begin
     import REPLicant
     import Sockets

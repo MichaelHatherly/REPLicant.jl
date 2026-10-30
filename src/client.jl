@@ -2,6 +2,18 @@
 # Client.
 #
 
+# The client's output stream, whatever it is underneath: a pipe under an agent, a
+# file when redirected, a terminal under a human. One concrete type means the code
+# below `cli` compiles once, at precompile time, for all of them.
+struct Output <: IO
+    io::IO
+end
+Base.unsafe_write(o::Output, p::Ptr{UInt8}, n::UInt) = unsafe_write(o.io, p, n)
+Base.write(o::Output, b::UInt8) = write(o.io, b)
+Base.flush(o::Output) = flush(o.io)
+Base.get(o::Output, key, default) = get(o.io, key, default)
+Base.displaysize(o::Output) = displaysize(o.io)
+
 # A registry entry as the selection cascade needs it. Parsed from the key=value
 # files servers write, named by port in the registry directory.
 struct RegistryEntry
@@ -324,9 +336,10 @@ end
 # of a run and the tail that carries the value or error.
 function _send(
         port::Integer, code::String;
-        out::IO = stdout, err::IO = stderr, timeout_seconds = nothing,
+        out::IO = stdout, err::IO = stderr, @nospecialize(timeout_seconds = nothing),
         cwd::AbstractString = "", mod::AbstractString = "",
-        head_lines::Union{Nothing, Int} = nothing, tail_lines::Union{Nothing, Int} = nothing,
+        @nospecialize(head_lines::Union{Nothing, Int} = nothing),
+        @nospecialize(tail_lines::Union{Nothing, Int} = nothing),
     )
     sock = _open_request(port, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
     try
@@ -427,10 +440,10 @@ function _print_row(
 end
 
 # Terminate a target server's process. Resolves from the raw registry so a wedged
-# server still resolves, sends SIGTERM (SIGKILL with --force), and removes the
-# registry entry once the process exits, since a SIGKILL skips the server's own
-# cleanup. A process that outlives the signal keeps its entry, so `--force` still
-# finds it.
+# server still resolves, asks it to shut down, sends SIGTERM when it does not
+# answer (SIGKILL with --force), and removes the registry entry once the process
+# exits, since a SIGKILL skips the server's own cleanup. A process that outlives
+# the signal keeps its entry, so `--force` still finds it.
 function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
@@ -444,20 +457,34 @@ function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
         return 0
     end
 
-    signal = parsed.force ? "SIGKILL" : "SIGTERM"
-    delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
-    if !delivered || !_await_exit(pid)
-        println(
-            err,
-            "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
-            but it is still running; stop it with: julia +rpc kill --force",
-        )
-        return 1
+    action = if !parsed.force && _request_shutdown(entry.port) && _await_exit(pid)
+        "shut down"
+    else
+        signal = parsed.force ? "SIGKILL" : "SIGTERM"
+        delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
+        if !delivered || !_await_exit(pid)
+            println(
+                err,
+                "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
+                but it is still running; stop it with: julia +rpc kill --force",
+            )
+            return 1
+        end
+        parsed.force ? "killed" : "terminated"
     end
     rm(path; force = true)
-    action = parsed.force ? "killed" : "terminated"
     println(out, "$action REPLicant server on port $(entry.port) (pid $pid)")
     return 0
+end
+
+# Ask the server on `port` to exit on its own. False when it does not answer, as when
+# an eval that never yields holds the thread its connections run on.
+function _request_shutdown(port::Integer)
+    return try
+        _exchange(port, REQUEST_SHUTDOWN, "").type == RESPONSE_OK
+    catch
+        false
+    end
 end
 
 # The Julia launcher for a started server: `julia` on PATH (the default channel), or
@@ -860,7 +887,8 @@ function _run_subcommand(args::Vector{String}, out::IO, err::IO)
     return nothing
 end
 
-function cli(args::Vector{String} = ARGS; out::IO = stdout, err::IO = stderr)
+function cli(args::Vector{String} = ARGS; @nospecialize(out::IO = stdout), @nospecialize(err::IO = stderr))
+    out, err = Output(out), Output(err)
     try
         handled = _run_subcommand(args, out, err)
         isnothing(handled) || return handled
