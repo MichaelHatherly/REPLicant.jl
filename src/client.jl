@@ -440,10 +440,10 @@ function _print_row(
 end
 
 # Terminate a target server's process. Resolves from the raw registry so a wedged
-# server still resolves, sends SIGTERM (SIGKILL with --force), and removes the
-# registry entry once the process exits, since a SIGKILL skips the server's own
-# cleanup. A process that outlives the signal keeps its entry, so `--force` still
-# finds it.
+# server still resolves, asks it to shut down, sends SIGTERM when it does not
+# answer (SIGKILL with --force), and removes the registry entry once the process
+# exits, since a SIGKILL skips the server's own cleanup. A process that outlives
+# the signal keeps its entry, so `--force` still finds it.
 function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
@@ -457,20 +457,34 @@ function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
         return 0
     end
 
-    signal = parsed.force ? "SIGKILL" : "SIGTERM"
-    delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
-    if !delivered || !_await_exit(pid)
-        println(
-            err,
-            "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
-            but it is still running; stop it with: julia +rpc kill --force",
-        )
-        return 1
+    action = if !parsed.force && _request_shutdown(entry.port) && _await_exit(pid)
+        "shut down"
+    else
+        signal = parsed.force ? "SIGKILL" : "SIGTERM"
+        delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
+        if !delivered || !_await_exit(pid)
+            println(
+                err,
+                "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
+                but it is still running; stop it with: julia +rpc kill --force",
+            )
+            return 1
+        end
+        parsed.force ? "killed" : "terminated"
     end
     rm(path; force = true)
-    action = parsed.force ? "killed" : "terminated"
     println(out, "$action REPLicant server on port $(entry.port) (pid $pid)")
     return 0
+end
+
+# Ask the server on `port` to exit on its own. False when it does not answer, as when
+# an eval that never yields holds the thread its connections run on.
+function _request_shutdown(port::Integer)
+    return try
+        _exchange(port, REQUEST_SHUTDOWN, "").type == RESPONSE_OK
+    catch
+        false
+    end
 end
 
 # The Julia launcher for a started server: `julia` on PATH (the default channel), or

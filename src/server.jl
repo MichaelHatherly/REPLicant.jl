@@ -536,6 +536,7 @@ function _dispatch(
     )
     enqueued = false
     restart = false
+    shutdown = false
     try
         frame = _read_request(sock, srv.token, srv.read_timeout_seconds)
         if isnothing(frame)
@@ -564,6 +565,12 @@ function _dispatch(
             _check_restartable()
             _write_frame(sock, RESPONSE_OK, "restarting")
             restart = true
+        elseif frame.type == REQUEST_SHUTDOWN
+            # Exits from this task once the socket is closed below. A SIGTERM runs the
+            # exit hooks wherever the main thread was, and inside a libuv callback
+            # they hang.
+            _write_frame(sock, RESPONSE_OK, "shutting down")
+            shutdown = true
         else
             decoded = _decode_eval_body(frame.body)
             # Resolve the target module now, while accepting the request, so a later
@@ -585,5 +592,6 @@ function _dispatch(
         end
     end
     restart && _reexec()
+    shutdown && exit()
     return
 end

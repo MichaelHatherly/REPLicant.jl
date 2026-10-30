@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop `julia +rpc kill` from hanging a server it was meant to stop. `kill` sent SIGTERM, and Julia then ran the server's exit hooks from wherever its main thread happened to be. The hooks never finished inside a socket callback, such as the one handling the connection `kill` opens to check the server is up, so the process stayed up. `kill` now asks the server over its socket to shut down, and the server exits from a task of its own without printing a signal backtrace into its terminal. SIGTERM remains the fallback for a server too busy to answer [#87]
 - Clear the copy of the footer a widening terminal leaves behind. Some terminals rejoin wrapped lines as they widen. The rejoining can lift the old footer into the blank rows below the prompt, and it stayed there as a second status row. The next repaint now erases from the cursor down. While the cursor is mid-edit the erase waits, so typed input is never lost [#85]
 - Keep the prompt on screen when a terminal with the footer enabled loses height. The footer's row stopped the terminal trimming the blank rows below the prompt, so the prompt scrolled off the top and the screen stayed blank until the next keystroke. The REPL now redraws its prompt and input after the shrink [#85]
 - Refuse a `--timeout` too large for the read timer, such as `inf`. It passed validation, so the client sent the eval and then failed with an `InexactError` while the eval kept running on the server [#83]
