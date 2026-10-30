@@ -456,41 +456,26 @@ end
 # Busy indicator.
 #
 
-# Depth of in-flight remote evaluations. A counter, not a flag, so overlapping or
-# nested signals compose; the worker is sequential today, so depth is 0 or 1.
-const REMOTE_EVAL_DEPTH = Threads.Atomic{Int}(0)
-
-# True while at least one remote evaluation is running. Read from the footer's
-# upkeep task; the atomic gives a consistent value.
-_is_busy() = REMOTE_EVAL_DEPTH[] > 0
+# True while this process's server, the one the title and footer report, is
+# mid-evaluation. A test server evaluating in the same process leaves it false.
+function _is_busy()
+    srv = CURRENT_SERVER[]
+    return !isnothing(srv) && !isnothing(srv.busy_since)
+end
 
 # Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
-# `__notify_busy(::Nothing)` to set the terminal title.
-# Without REPL the `::Any` fallback does nothing.
-function _notify_busy(delta::Int)
-    Threads.atomic_add!(REMOTE_EVAL_DEPTH, delta)
-    __notify_busy(nothing)
-    # Both edges of an evaluation change what the footer's status row says, and an
-    # eval that finishes quickly would otherwise never be seen to have started.
-    Footers.update!()
-    return nothing
-end
+# `__notify_busy(::Nothing)` to set the terminal title; `_set_busy!` calls it on
+# both edges of an evaluation. Without REPL the `::Any` fallback does nothing.
 __notify_busy(::Any) = nothing
 
-# Evaluate a remote request while signaling that work is in flight. Pings never
-# reach here, so the indicator reflects only real evaluations.
+# Evaluate a remote request. Record here, the single choke point for agent evals: it
+# covers help queries (which `_evaluate` early-returns) and normal evals, while
+# pings, interrupts, resets, and log requests never reach it, so the log carries no
+# probe noise.
 function _evaluate_request(code::AbstractString, id::Integer, mod::Module, dir::AbstractString)
-    _notify_busy(1)
-    return try
-        result = _evaluate(code, id, mod, dir)
-        # Record here, the single choke point for agent evals: it covers help queries
-        # (which `_evaluate` early-returns) and normal evals, while pings, interrupts,
-        # resets, and log requests never reach it, so the log carries no probe noise.
-        _record_activity(:socket, code, result.output, result.errored)
-        result
-    finally
-        _notify_busy(-1)
-    end
+    result = _evaluate(code, id, mod, dir)
+    _record_activity(:socket, code, result.output, result.errored)
+    return result
 end
 
 #

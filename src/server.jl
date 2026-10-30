@@ -405,14 +405,18 @@ end
 # render it in `ls` to tell a wedged server from an idle one.
 _busy_marker(srv::Server) = isnothing(srv.busy_since) ? "" : string(srv.busy_since)
 
-# The footer's status row reads `busy_since`, so each change to it asks for a repaint.
-# The code is written first, so a reader that sees the time also sees its code.
+# The terminal title and the footer's status row read `busy_since`, so each change
+# to it updates the title and asks for a repaint; an eval that finishes quickly
+# would otherwise never be seen to have started. The code is written first, so a
+# reader that sees the time also sees its code.
 function _set_busy!(
         srv::Server, since::Union{Dates.DateTime, Nothing}, code::AbstractString = srv.busy_code,
     )
     srv.busy_code = code
     srv.busy_since = since
+    # Request the repaint before the title write, which can yield.
     Footers.update!()
+    __notify_busy(nothing)
     return nothing
 end
 
