@@ -218,19 +218,22 @@ end
 @testitem "eval_runs_while_busy" tags = [:protocol] setup = [Utilities] begin
     Utilities.withserver() do server, mod, port
         # Code is evaluated while the busy signal is set, so a remote eval can
-        # observe `_is_busy()` as true. Outside the eval the server is idle.
+        # observe `_is_busy()` as true. Afterwards the depth is back where it was:
+        # zero, or one when a warm suite run is itself inside a remote eval.
+        depth = REPLicant.REMOTE_EVAL_DEPTH[]
         Core.eval(mod, :(import REPLicant))
         @test Utilities.request(port, "REPLicant._is_busy()") == "true"
-        @test !REPLicant._is_busy()
+        @test REPLicant.REMOTE_EVAL_DEPTH[] == depth
     end
 end
 
 @testitem "ping_leaves_idle" tags = [:protocol] setup = [Utilities] begin
     Utilities.withserver() do server, mod, port
         # A liveness ping never enters the eval path, so it never marks busy.
+        depth = REPLicant.REMOTE_EVAL_DEPTH[]
         frame = Utilities.requestframe(port, REPLicant.REQUEST_PING, "")
         @test frame.type == REPLicant.RESPONSE_PONG
-        @test !REPLicant._is_busy()
+        @test REPLicant.REMOTE_EVAL_DEPTH[] == depth
     end
 end
 

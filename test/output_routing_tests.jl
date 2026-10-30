@@ -1,10 +1,12 @@
-@testitem "routing_display_declines_without_target" tags = [:output_routing] begin
+@testitem "routing_display_declines_without_target" tags = [:output_routing] setup = [Utilities] begin
     import REPLicant
 
     REPLicant._install_routing!()
     # With no capture target bound, `RouterDisplay` declines via a `MethodError`
     # so the global display stack falls through to the REPL's own display.
-    @test_throws MethodError display(REPLicant.RouterDisplay(), 3)
+    Utilities.outside_capture() do
+        @test_throws MethodError display(REPLicant.RouterDisplay(), 3)
+    end
 end
 
 @testitem "routing_captures_when_bound" tags = [:output_routing] begin
