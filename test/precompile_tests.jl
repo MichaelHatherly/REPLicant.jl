@@ -3,10 +3,12 @@
 
     # A Julia command that loads REPLicant's package image. Coverage and allocation
     # tracking make Julia ignore package images, which would make every method look
-    # compiled at runtime, so the test runner's own flags for those are dropped.
+    # compiled at runtime, so the test runner's own flags for those are dropped. Julia
+    # 1.10 also turns package images off under coverage, and says so in `julia_cmd`.
     function julia_cmd()
         exec = filter(Base.julia_cmd().exec) do arg
-            !startswith(arg, "--code-coverage") && !startswith(arg, "--track-allocation")
+            !startswith(arg, "--code-coverage") && !startswith(arg, "--track-allocation") &&
+                arg != "--pkgimages=no"
         end
         return `$exec --startup-file=no --project=$(pkgdir(REPLicant))`
     end
@@ -137,5 +139,8 @@ end
 @testitem "server_with_test_extension_compiles_nothing_of_its_own_at_runtime" tags = [:precompile] setup = [Precompiled] begin
     result = Precompiled.runtime_compiles("import Test;")
     @test Precompiled.compiling_clients(result) == []
-    @test result.server == String[]
+    # Julia 1.10 keeps REPL in its sysimage, so the REPL extension loads alongside
+    # Test. Each extension's image is built without the other, and together they
+    # invalidate the eval path both recompiled, so its first eval compiles it again.
+    @test result.server == String[] broken = VERSION < v"1.11"
 end
