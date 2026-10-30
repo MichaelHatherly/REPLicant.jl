@@ -277,19 +277,33 @@ function _serve(server, srv::Server, entry_path)
             @error "Unexpected error in server loop" error
         end
     finally
-        # Signal worker to stop by closing the queue
+        # Closing the queue stops the worker, which refuses what is still queued.
         close(request_queue)
-
-        # Wait for worker to finish processing remaining requests
+        _interrupt_eval(srv)
+        # Unregister before waiting, since an eval that never yields ignores the
+        # interrupt and would keep the worker running.
+        _shutdown_server(server, srv, entry_path)
         try
             wait(worker)
         catch error
             @debug "Worker task error during shutdown" error
         end
-
-        # Ensure cleanup runs even if the server loop fails
-        _shutdown_server(server, srv, entry_path)
     end
+end
+
+const SHUTTING_DOWN = "Server shutting down"
+
+# Answer a request the closing server will not evaluate.
+function _refuse_shutting_down(request::ClientRequest, active_connections)
+    try
+        _write_frame(request.socket, RESPONSE_ERR, SHUTTING_DOWN)
+    catch error
+        @debug "Failed to send shutdown error to client" id = request.id error
+    finally
+        close(request.socket)
+        Threads.atomic_sub!(active_connections, 1)
+    end
+    return nothing
 end
 
 # Close the listener, drop this process's handle, and remove the registry entry.
@@ -316,6 +330,10 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
         Threads.@spawn begin
             try
                 for request in request_queue
+                    if !isopen(request_queue)
+                        _refuse_shutting_down(request, active_connections)
+                        continue
+                    end
                     # Run the eval in its own task so an interrupt request frees it
                     # without unwinding the worker loop. The worker stays sequential:
                     # it waits for each eval before taking the next, so only one eval
@@ -347,8 +365,11 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                             end
                         end
                     end
-                    _set_busy!(srv, Dates.now(), request.code)
                     srv.interrupt_signal = signal
+                    # A close between the check above and publishing the signal
+                    # found nothing to interrupt.
+                    isopen(request_queue) || notify(signal)
+                    _set_busy!(srv, Dates.now(), request.code)
                     try
                         wait(eval_task)
                     catch error
@@ -499,7 +520,12 @@ function _dispatch(
             mod = _request_module(srv, decoded.mod)
             isempty(decoded.cwd) || isdir(decoded.cwd) ||
                 throw(RequestError("no such directory: $(decoded.cwd)"))
-            put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
+            try
+                put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
+            catch error
+                error isa InvalidStateException || rethrow()
+                throw(RequestError(SHUTTING_DOWN))
+            end
             enqueued = true
         end
     catch error

@@ -270,3 +270,26 @@ end
     end
     @test close(server) === nothing
 end
+
+@testitem "close_interrupts_running_eval" tags = [:server_lifecycle] setup = [Utilities] begin
+    import REPLicant
+
+    # A close must not wait out the running eval, nor run the ones queued behind it.
+    Utilities.withserver() do server, mod, port
+        entry = REPLicant._registry_entry_path(port)
+        running = @async Utilities.request(port, "sleep(600)")
+        deadline = time() + 30
+        while isempty(something(REPLicant._ping_status(port), "")) && time() < deadline
+            sleep(0.05)
+        end
+        queued = @async Utilities.request(port, "global queued_ran = true")
+        sleep(0.5)
+
+        close(server)
+        @test timedwait(() -> istaskdone(server.task), 10) === :ok
+        @test !isfile(entry)
+        @test contains(fetch(running), "InterruptException")
+        @test contains(fetch(queued), "shutting down")
+        @test !isdefined(mod, :queued_ran)
+    end
+end
