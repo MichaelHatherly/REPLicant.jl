@@ -462,10 +462,12 @@ end
 
 # Write the footer update as a single `write`, so it cannot land inside one of
 # the line editor's redraws.
-function repaint!(footer::Footer)
+function repaint!(footer::Footer; paused::Bool = prompt_evaluating())
     sections = Base.@lock footer.lock begin
         # A disabled footer owns no rows. `disable!` hands them back itself.
         footer.enabled || return nothing
+        # Upkeep repaints once the prompt's eval returns, forcing the region back.
+        paused && return (footer.stale = true; nothing)
         copy(footer.sections)
     end
     height, width = displaysize(footer.io)
@@ -613,10 +615,20 @@ function disturbed!()
     return nothing
 end
 
+repl_backend() = isdefined(Base, :active_repl_backend) ? Base.active_repl_backend : nothing
+
+"""
+    prompt_evaluating(backend = repl_backend())
+
+Whether code typed at the prompt is running. It owns the screen until it returns,
+and may be a full-screen program like `less` that a paint would draw over.
+"""
+prompt_evaluating(backend = repl_backend()) =
+    backend !== nothing && hasproperty(backend, :in_eval) && backend.in_eval
+
 function install_eval_hook!()
     EVAL_HOOKED[] && return true
-    isdefined(Base, :active_repl_backend) || return false
-    backend = Base.active_repl_backend
+    backend = repl_backend()
     backend === nothing && return false
     hasproperty(backend, :ast_transforms) || return false
     # Applied with `invokelatest`, so a closure pushed from here is safe to call
@@ -633,7 +645,8 @@ function upkeep(footer::Footer)
         install_eval_hook!()
         # The REPL extension can load after this task started, in a newer world.
         Base.invokelatest(__install_keys, nothing)
-        footer.enabled || continue
+        # The hook fires before the prompt's eval runs; repair once it has returned.
+        (footer.enabled && !prompt_evaluating()) || continue
         evaluated = EVALUATED[]
         evaluated && (EVALUATED[] = false)
         live = LIVE[]

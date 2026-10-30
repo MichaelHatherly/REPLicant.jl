@@ -238,6 +238,23 @@ end
     @test written(buf) == "\e7\e[24;1Hone\e[0m\e[K\e8"
 end
 
+@testitem "footer_waits_out_a_prompt_eval" tags = [:footer] setup = [FooterHarness] begin
+    F, harness, written = FooterHarness.F, FooterHarness.harness, FooterHarness.written
+
+    # Code run at the prompt owns the screen until it returns: `less` or `vim` on the
+    # alternate screen would be drawn over. The paint waits, then claims the region.
+    @test F.prompt_evaluating((; in_eval = true))
+    @test !F.prompt_evaluating((; in_eval = false))
+    @test !F.prompt_evaluating(nothing)
+
+    footer, buf = harness(24, 80)
+    F.set!(:a, "one", footer)
+    F.repaint!(footer; paused = true)
+    @test written(buf) == ""
+    F.repaint!(footer)
+    @test written(buf) == "\e7\e[1S\e[1;23r\e[24;1Hone\e[0m\e[K\e8\e[1A"
+end
+
 @testitem "footer_writes_under_its_lock" tags = [:footer] setup = [FooterHarness] begin
     F = FooterHarness.F
 
