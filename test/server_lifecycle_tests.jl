@@ -99,6 +99,26 @@ end
     end
 end
 
+@testitem "close_keeps_capturing_an_eval_that_outlives_the_interrupt" tags = [:server_lifecycle] setup = [Utilities] begin
+    import REPLicant
+
+    # The eval swallows the shutdown interrupt and carries on printing. Its output
+    # must still reach its client, so the server keeps its hold on routing until
+    # the worker finishes, and gives it up after.
+    Utilities.withserver() do server, mod, port
+        code = "try sleep(600) catch end; sleep(2); println(\"after interrupt\"); 1"
+        running = @async Utilities.request(port, code)
+        @test timedwait(() -> !isnothing(server.busy_since), 10.0) === :ok
+        close(server)
+        sleep(0.5)
+        @test server in REPLicant.ROUTING_SERVERS
+        @test timedwait(() -> istaskdone(running), 10.0) === :ok
+        @test contains(fetch(running), "after interrupt")
+        @test timedwait(() -> istaskdone(server.task), 10.0) === :ok
+        @test !(server in REPLicant.ROUTING_SERVERS)
+    end
+end
+
 @testitem "closed_servers_leave_no_exit_hooks" setup = [Utilities] tags = [:server_lifecycle] begin
     import REPLicant
 

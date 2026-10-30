@@ -297,12 +297,13 @@ function _serve(server, srv::Server, entry_path)
         _interrupt_eval(srv)
         # Unregister before waiting, since an eval that never yields ignores the
         # interrupt and would keep the worker running.
-        _shutdown_server(server, srv, entry_path)
+        _close_and_unregister!(server, srv, entry_path)
         try
             wait(worker)
         catch error
             @debug "Worker task error during shutdown" error
         end
+        _release_routing!(srv)
     end
 end
 
@@ -332,11 +333,18 @@ function _refuse_shutting_down(request::ClientRequest, active_connections::Threa
     return nothing
 end
 
-# Close the listener, drop this process's handle, and remove the registry entry.
+# Close the listener, drop this process's handle, and remove the registry entry, then
+# give up this server's hold on output routing.
 function _shutdown_server(listener, srv::Server, entry_path)
+    _close_and_unregister!(listener, srv, entry_path)
+    return _release_routing!(srv)
+end
+
+# Stop taking connections and leave the registry. Routing stays, since an eval still
+# running when the server closes is capturing through it.
+function _close_and_unregister!(listener, srv::Server, entry_path)
     Base.@lock RUNNING_LOCK delete!(RUNNING_SERVERS, srv)
     close(listener)
-    _release_routing!(srv)
     return _unregister!(srv, entry_path)
 end
 
