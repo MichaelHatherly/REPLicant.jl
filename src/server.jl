@@ -308,6 +308,17 @@ end
 
 const SHUTTING_DOWN = "Server shutting down"
 
+# Hand a request to the worker. A queue closed by shutdown refuses it.
+function _enqueue!(request_queue::Channel{ClientRequest}, request::ClientRequest)
+    try
+        put!(request_queue, request)
+    catch error
+        error isa InvalidStateException || rethrow()
+        throw(RequestError(SHUTTING_DOWN))
+    end
+    return nothing
+end
+
 # Answer a request the closing server will not evaluate.
 function _refuse_shutting_down(request::ClientRequest, active_connections::Threads.Atomic{Int})
     try
@@ -536,12 +547,7 @@ function _dispatch(
             mod = _request_module(srv, decoded.mod)
             isempty(decoded.cwd) || isdir(decoded.cwd) ||
                 throw(RequestError("no such directory: $(decoded.cwd)"))
-            try
-                put!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
-            catch error
-                error isa InvalidStateException || rethrow()
-                throw(RequestError(SHUTTING_DOWN))
-            end
+            _enqueue!(request_queue, ClientRequest(sock, id, decoded.code, decoded.cwd, mod))
             enqueued = true
         end
     catch error
