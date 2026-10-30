@@ -420,6 +420,18 @@ function _set_busy!(
     return nothing
 end
 
+# True while this process's server, the one the title and footer report, is
+# mid-evaluation. A test server evaluating in the same process leaves it false.
+function _is_busy()
+    srv = CURRENT_SERVER[]
+    return !isnothing(srv) && !isnothing(srv.busy_since)
+end
+
+# Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
+# `__notify_busy(::Nothing)` to set the terminal title; `_set_busy!` calls it on
+# both edges of an evaluation. Without REPL the `::Any` fallback does nothing.
+__notify_busy(::Any) = nothing
+
 # Request an interrupt of the running eval, freeing a wedged worker without killing
 # the process. Returns whether an eval was running to interrupt. Called from the
 # dispatcher, off the worker queue, so it reaches a server whose worker is wedged.

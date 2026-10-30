@@ -459,20 +459,8 @@ function __help(::Any, query::AbstractString, mod::Module)
 end
 
 #
-# Busy indicator.
+# Remote requests.
 #
-
-# True while this process's server, the one the title and footer report, is
-# mid-evaluation. A test server evaluating in the same process leaves it false.
-function _is_busy()
-    srv = CURRENT_SERVER[]
-    return !isnothing(srv) && !isnothing(srv.busy_since)
-end
-
-# Two-layer dispatch, mirroring `_revise`/`_help`. The REPL extension overrides
-# `__notify_busy(::Nothing)` to set the terminal title; `_set_busy!` calls it on
-# both edges of an evaluation. Without REPL the `::Any` fallback does nothing.
-__notify_busy(::Any) = nothing
 
 # Evaluate a remote request. Record here, the single choke point for agent evals: it
 # covers help queries (which `_evaluate` early-returns) and normal evals, while
