@@ -48,9 +48,9 @@ end
     @test decoded.code == "a\n2\nb"
 end
 
-@testitem "protocol_version_is_three" tags = [:protocol, :frame] begin
+@testitem "protocol_version_is_four" tags = [:protocol, :frame] begin
     import REPLicant
-    @test REPLicant.PROTOCOL_VERSION == 0x03
+    @test REPLicant.PROTOCOL_VERSION == 0x04
 end
 
 @testitem "frame_bare_disconnect_is_nothing" tags = [:protocol, :frame] begin
@@ -356,6 +356,7 @@ end
 
     Utilities.withserver() do server, mod, port
         sock = Sockets.connect(Sockets.localhost, port)
+        Utilities.handshake(sock)
         write(sock, REPLicant.PROTOCOL_MAGIC)
         write(sock, REPLicant.PROTOCOL_VERSION)
         write(sock, REPLicant.REQUEST_EVAL)

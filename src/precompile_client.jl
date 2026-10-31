@@ -33,7 +33,7 @@ function _workload_acceptor(listener::Sockets.TCPServer, token::String)
             break
         end
         try
-            frame = _read_request(sock, token, READ_TIMEOUT_SECONDS)
+            frame = _accept_request(sock, token, READ_TIMEOUT_SECONDS)
             if !isnothing(frame) && frame.type == REQUEST_PING
                 _write_frame(sock, RESPONSE_PONG, "")
             else

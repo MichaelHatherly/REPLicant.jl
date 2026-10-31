@@ -4,12 +4,21 @@
     import Sockets
     import Test
 
+    # Pass the server's challenge on `sock`, as the client does before any request.
+    # Returns the token the server proved it holds.
+    function handshake(sock)
+        port = Int(Sockets.getpeername(sock)[2])
+        token = REPLicant._entry_token(port)
+        REPLicant._verify_server(sock, port, token; timeout_seconds = 30.0)
+        return token
+    end
+
     # Send an eval frame without waiting for the response. Used to hold a
     # connection slot open. Encodes the v2 eval body (the CLI's `cwd`/`mod` fields
     # default to empty: keep the server's cwd and the default module).
     function sendframe(sock, code; cwd = "", mod = "")
         body = REPLicant._encode_eval_body(; cwd, mod, code)
-        token = REPLicant._entry_token(Int(Sockets.getpeername(sock)[2]))
+        token = handshake(sock)
         REPLicant._write_request(sock, token, REPLicant.REQUEST_EVAL, body)
         return sock
     end
@@ -47,6 +56,7 @@
             payload =
                 type == REPLicant.REQUEST_EVAL ?
                 REPLicant._encode_eval_body(; cwd = "", mod = "", code = body) : body
+            handshake(sock)
             REPLicant._write_request(sock, token, type, payload)
             return readframe(sock)
         finally

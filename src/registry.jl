@@ -138,7 +138,7 @@ end
 # intended lockstep behavior.
 function _ping_status(port::Integer; timeout_seconds = PING_TIMEOUT_SECONDS)
     try
-        sock = _open_request(port, REQUEST_PING, "")
+        sock = _open_request(port, REQUEST_PING, ""; timeout_seconds)
         try
             frame = _read_frame(sock, RESPONSE_TYPES; timeout_seconds)
             (isnothing(frame) || frame.type != RESPONSE_PONG) && return nothing

@@ -2,8 +2,10 @@
     import Sockets
 
     Utilities.withserver() do server, mod, port
-        # A local peer that cannot read the registry has no token to send.
+        # A local peer that cannot read the registry has no token to send. The
+        # handshake needs none from the client, so it gets that far.
         sock = Sockets.connect(Sockets.localhost, port)
+        Utilities.handshake(sock)
         body = REPLicant._encode_eval_body(; cwd = "", mod = "", code = "pwned = true")
         REPLicant._write_frame(sock, REPLicant.REQUEST_EVAL, body)
         frame = Utilities.readframe(sock)
@@ -19,12 +21,27 @@ end
 
     Utilities.withserver() do server, mod, port
         sock = Sockets.connect(Sockets.localhost, port)
+        Utilities.handshake(sock)
         body = REPLicant._encode_eval_body(; cwd = "", mod = "", code = "pwned = true")
         REPLicant._write_request(sock, REPLicant._new_token(), REPLicant.REQUEST_EVAL, body)
         frame = Utilities.readframe(sock)
         close(sock)
         @test frame.type == REPLicant.RESPONSE_ERR
         @test contains(frame.body, "token")
+        @test !isdefined(mod, :pwned)
+    end
+end
+
+@testitem "request_without_challenge_rejected" tags = [:protocol, :token] setup = [Utilities] begin
+    import Sockets
+
+    Utilities.withserver() do server, mod, port
+        sock = Sockets.connect(Sockets.localhost, port)
+        body = REPLicant._encode_eval_body(; cwd = "", mod = "", code = "pwned = true")
+        REPLicant._write_request(sock, REPLicant._entry_token(port), REPLicant.REQUEST_EVAL, body)
+        frame = Utilities.readframe(sock)
+        close(sock)
+        @test frame.type == REPLicant.RESPONSE_ERR
         @test !isdefined(mod, :pwned)
     end
 end
@@ -130,5 +147,76 @@ end
             end
             @test filemode(target) & 0o777 == 0o755
         end
+    end
+end
+
+@testmodule Squatter begin
+    import REPLicant
+    import Sockets
+
+    # A process on a dead server's registered port. It answers every frame with
+    # `reply(type, body)`, a `(type, body)` pair, and keeps every byte it is sent.
+    function withsquatter(func, reply)
+        return mktempdir() do registry
+            withenv("REPLICANT_DIR" => registry) do
+                port, listener = Sockets.listenany(0)
+                received = IOBuffer()
+                acceptor = @async while isopen(listener)
+                    sock = try
+                        Sockets.accept(listener)
+                    catch  # dendro-ignore: empty_catch -- the listener closing ends the loop
+                        break
+                    end
+                    try
+                        _answer_frames(sock, received, reply)
+                    finally
+                        close(sock)
+                    end
+                end
+                REPLicant._write_registry_entry(Int(port), registry; token = REPLicant._new_token())
+                try
+                    func(Int(port), received)
+                finally
+                    close(listener)
+                    wait(acceptor)
+                end
+            end
+        end
+    end
+
+    function _answer_frames(sock, received, reply)
+        while true
+            header = read(sock, REPLicant.FRAME_HEADER_BYTES)
+            length(header) == REPLicant.FRAME_HEADER_BYTES || return
+            body = read(sock, ntoh(reinterpret(UInt32, header[7:10])[1]))
+            write(received, header, body)
+            REPLicant._write_frame(sock, reply(header[6], String(body))...)
+        end
+    end
+end
+
+@testitem "squatter_that_pongs_reads_as_dead" tags = [:protocol, :token] setup = [Squatter] begin
+    pong(type, body) = (REPLicant.RESPONSE_PONG, "")
+    Squatter.withsquatter(pong) do port, received
+        @test !REPLicant._ping(port)
+    end
+end
+
+@testitem "squatter_with_forged_proof_reads_as_dead" tags = [:protocol, :token] setup = [Squatter] begin
+    # Without the registry token, the best a squatter can do is prove some other one.
+    forged(type, nonce) = (REPLicant.RESPONSE_PROOF, REPLicant._proof(REPLicant._new_token(), nonce))
+    Squatter.withsquatter(forged) do port, received
+        @test !REPLicant._ping(port)
+    end
+end
+
+@testitem "eval_to_squatter_sends_no_code_or_token" tags = [:protocol, :token] setup = [Squatter] begin
+    pong(type, body) = (REPLicant.RESPONSE_PONG, "")
+    Squatter.withsquatter(pong) do port, received
+        token = REPLicant._entry_token(port)
+        @test_throws REPLicant.UnverifiedServer REPLicant._send(port, "secret = 1"; out = IOBuffer(), err = IOBuffer())
+        sent = String(take!(received))
+        @test !contains(sent, "secret = 1")
+        @test !contains(sent, token)
     end
 end
