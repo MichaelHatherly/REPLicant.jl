@@ -92,6 +92,19 @@ end
     @test strip(REPLicant._evaluate("\"\"", 1, mod, "").output) == "\"\""
 end
 
+@testitem "eval_echo_rule_defined_in_same_eval" tags = [:code_evaluation] begin
+    mod = Module()
+    # Loading a package mid-eval adds its extension's echo rule in a newer world,
+    # as the Test extension does for `DefaultTestSet`; the rule must still apply.
+    code = """
+    import REPLicant
+    struct QuietValue end
+    REPLicant._echo_object(::QuietValue) = false
+    QuietValue()
+    """
+    @test strip(REPLicant._evaluate(code, 1, mod, "").output) == ""
+end
+
 @testitem "eval_array_display" tags = [:code_evaluation] begin
     mod = Module()
     result = REPLicant._evaluate("[1, 2, 3]", 1, mod, "")

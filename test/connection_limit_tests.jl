@@ -27,6 +27,24 @@
     end
 end
 
+@testitem "connection_limit_client_reports_capacity" tags = [:concurrent, :limits] setup = [Utilities] begin
+    import REPLicant
+    import Sockets
+
+    Utilities.withserver(; max_connections = 1) do server, mod, port
+        held = Utilities.sendframe(Sockets.connect(Sockets.localhost, port), "sleep(0.5); 1")
+        sleep(0.1)  # let the server accept and count it
+
+        @test REPLicant._ping(port)
+        out, err = IOBuffer(), IOBuffer()
+        @test REPLicant.cli(["--port=$port", "-e", "2"]; out, err) == 1
+        @test contains(String(take!(err)), "Server at capacity")
+
+        @test strip(Utilities.readresp(held)) == "1"
+        close(held)
+    end
+end
+
 @testitem "connection_limit_bounds_pending_rejections" tags = [:concurrent, :limits] setup =
     [Utilities] begin
     import REPLicant

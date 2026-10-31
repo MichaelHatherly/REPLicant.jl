@@ -264,6 +264,8 @@ function _parse_args(args::Vector{String})
         _parse_number(Int, values["--head-lines"], >=(0), "--head-lines") : nothing
     tail_lines = haskey(values, "--tail-lines") ?
         _parse_number(Int, values["--tail-lines"], >=(0), "--tail-lines") : nothing
+    since = haskey(values, "--since") ?
+        _parse_number(Int, values["--since"], >=(0), "--since") : nothing
     code = get(values, "-e", get(values, "--eval", nothing))
     isnothing(file) ||
         isnothing(code) ||
@@ -275,7 +277,7 @@ function _parse_args(args::Vector{String})
         dir = get(values, "--dir", ""),
         mod = get(values, "--module", ""),
         channel = get(values, "--channel", ""),
-        since = get(values, "--since", ""),
+        since,
         code,
         file,
         script_args,
@@ -585,17 +587,18 @@ function _check_julia_version(
         path = abspath(dir, project)
         isdir(path) ? path : dirname(path)
     end
-    manifest_version = manifest_version_of(search_dir, walk)::Union{Nothing, String}
-    isnothing(manifest_version) && return nothing
     channel_version = channel_version_of(channel)::Union{Nothing, String}
     isnothing(channel_version) && return nothing
     function _minor(v::String)
         m = match(r"^(\d+\.\d+)", v)
         return isnothing(m) ? nothing : m.captures[1]
     end
-    manifest_minor = _minor(manifest_version)
     channel_minor = _minor(channel_version)
-    (isnothing(manifest_minor) || isnothing(channel_minor)) && return nothing
+    isnothing(channel_minor) && return nothing
+    manifest_version = manifest_version_of(search_dir, walk, channel_minor)::Union{Nothing, String}
+    isnothing(manifest_version) && return nothing
+    manifest_minor = _minor(manifest_version)
+    isnothing(manifest_minor) && return nothing
     manifest_minor == channel_minor && return nothing
 
     error(
@@ -632,12 +635,12 @@ function _start_server(args::Vector{String}; out::IO = stdout)
 
     # The detached server runs the same recipe an interactive session does: start,
     # wait for the port, optionally label, then block on the server task forever.
+    # It reports its port through `portfile`, so another server registering for
+    # the same project meanwhile is not mistaken for it.
     label = isempty(parsed.name) ? "" : "REPLicant.label!($(repr(parsed.name))); "
-    script = "using REPLicant; s = REPLicant.Server(save = true); take!(s.channel); $(label)wait(s.task)"
-
-    # Snapshot the live servers (pruning dead ones) so the new entry is identified as
-    # the one that appears for this project afterward, even across a reused port.
-    before = Set(entry.port for entry in _live_entries())
+    portfile = tempname()
+    script = "using REPLicant; s = REPLicant.Server(save = true); p = take!(s.channel); \
+        $(label)write($(repr(portfile)), string(p)); wait(s.task)"
 
     # Capture the detached server's stderr so a startup failure (REPLicant missing,
     # a precompile error) surfaces in the error instead of vanishing into devnull.
@@ -653,7 +656,11 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     process =
         run(pipeline(command; stdin = devnull, stdout = devnull, stderr = log); wait = false)
 
-    entry = _await_entry(root, before, process, log)
+    entry = try
+        _await_entry(portfile, process, log)
+    finally
+        rm(portfile; force = true)
+    end
     println(out, "started REPLicant server on port $(entry.port) for $(entry.project) (log: $log)")
     return 0
 end
@@ -665,20 +672,22 @@ function _start_log(log::AbstractString)
     return "; server stderr:\n" * read(log, String)
 end
 
-# Wait for the spawned server to register: a live entry rooted at `root` whose port
-# is new since `before`. Matching the entry rather than the spawned process's pid is
-# what works when `julia` is a launcher (the juliaup shim, or a detached PATH spawn
-# on Windows) that runs the server as a child with a different pid. Fails fast when
-# the process exits before registering, surfacing its captured stderr. The timeout is
+# Wait for the spawned server to register: the live entry on the port it wrote to
+# `portfile`. The server reports its own port because the spawned process's pid
+# does not identify it when `julia` is a launcher (the juliaup shim, or a detached
+# PATH spawn on Windows) that runs the server as a child. Fails fast when the
+# process exits before registering, surfacing its captured stderr. The timeout is
 # generous because a first start on a channel where REPLicant is not yet precompiled
 # builds its package image before the server can register.
-function _await_entry(root::AbstractString, before::Set{Int}, process, log::AbstractString; timeout = 180)
+function _await_entry(portfile::AbstractString, process, log::AbstractString; timeout = 180)
     deadline = time() + timeout
     while time() < deadline
-        for entry in _read_entries()
-            entry.port in before && continue
-            _canonical(entry.project) == root || continue
-            _ping(entry.port) && return entry
+        # A partly written file parses as nothing and is read again next round.
+        port = isfile(portfile) ? tryparse(Int, read(portfile, String)) : nothing
+        if !isnothing(port)
+            for entry in _read_entries()
+                entry.port == port && _ping(port) && return entry
+            end
         end
         Base.process_exited(process) &&
             error("the server process exited before registering$(_start_log(log))")
@@ -730,7 +739,7 @@ function _log_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
         rest = rest[2:end]
     end
     parsed = _parse_args(rest)
-    body = isempty(parsed.since) ? count : "since=$(parsed.since)"
+    body = isnothing(parsed.since) ? count : "since=$(parsed.since)"
     target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
     frame = _exchange(target, REQUEST_LOG, body)
     if frame.type == RESPONSE_ERR
@@ -810,31 +819,35 @@ const RESTART_SECONDS = 180
 function _restart_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
+    siblings = Set(e.started for e in _read_entries() if e.pid == entry.pid)
     frame = _exchange(entry.port, REQUEST_RESTART, "")
     if frame.type == RESPONSE_ERR
         println(err, "replicant: $(frame.body)")
         return 1
     end
-    restarted = _await_restart(entry)
+    restarted = _await_restart(entry, siblings)
     println(out, "restarted REPLicant server (pid $(entry.pid)), now on port $(restarted.port)")
     return 0
 end
 
-# Poll the registry for the restarted server: an entry with the old pid, a new start
-# time, and a socket that answers. Fails fast if the process exits instead.
-function _await_restart(old::RegistryEntry)
+# Poll the registry for the restarted server: an entry with the old pid, a socket
+# that answers, and a start time not in `siblings`, the start times of the pid's
+# entries before the restart was sent. A process can host several servers, and
+# the siblings stay registered until the re-exec runs their exit hooks. Fails fast
+# if the process exits instead.
+function _await_restart(old::RegistryEntry, siblings::Set{String}; timeout = RESTART_SECONDS)
     pid = parse(Int, old.pid)
-    deadline = time() + RESTART_SECONDS
+    deadline = time() + timeout
     while time() < deadline
         for entry in _read_entries()
-            (entry.pid == old.pid && entry.started != old.started) || continue
+            (entry.pid == old.pid && entry.started ∉ siblings) || continue
             _ping(entry.port) && return entry
         end
         _process_alive(pid) || error("the server process (pid $pid) exited during restart")
         sleep(0.1)
     end
     return error(
-        "the server (pid $pid) did not register again within $(RESTART_SECONDS)s; \
+        "the server (pid $pid) did not register again within $(timeout)s; \
         its terminal shows why",
     )
 end

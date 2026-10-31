@@ -74,3 +74,16 @@ end
         end
     end
 end
+
+@testitem "restart_ignores_sibling_servers" tags = [:restart] setup = [Utilities] begin
+    import REPLicant
+
+    # A process can host several servers. A sibling already registered when the
+    # restart was sent is not the restarted server, though it shares the pid.
+    Utilities.withserver() do server, mod, port
+        sibling = only(REPLicant._read_entries())
+        old = REPLicant.RegistryEntry(0, sibling.project, "", sibling.julia, sibling.pid, "before")
+        @test_throws ErrorException REPLicant._await_restart(old, Set([sibling.started]); timeout = 0.5)
+        @test REPLicant._await_restart(old, Set{String}(); timeout = 0.5).port == port
+    end
+end

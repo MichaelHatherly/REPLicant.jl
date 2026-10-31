@@ -38,9 +38,21 @@ over them without counting them as text.
 function escape_end(line::AbstractString, i::Integer)
     stop = lastindex(line)
     j = nextind(line, i)
-    if j <= stop && line[j] == '['
+    j <= stop || return j
+    introducer = line[j]
+    if introducer == '['
         j = nextind(line, j)
         while j <= stop && !('\u40' <= line[j] <= '\u7e')
+            j = nextind(line, j)
+        end
+    elseif introducer in (']', 'P', '_', '^')
+        # A string sequence (OSC, DCS, APC, PM) ends at BEL or at ST, `ESC \`.
+        previous = introducer
+        j = nextind(line, j)
+        while j <= stop
+            c = line[j]
+            (c == '\a' || (previous == '\e' && c == '\\')) && break
+            previous = c
             j = nextind(line, j)
         end
     end
@@ -76,12 +88,14 @@ visible(c::AbstractChar) = iscntrl(c) ? ' ' : c
     fit(line, width)
 
 Truncate `line` to `width` display columns, passing ANSI escape sequences
-through without counting them.
+through without counting them. Escapes past the cut are kept too, so a colour
+reset or a hyperlink's close still lands.
 """
 function fit(line::AbstractString, width::Integer)
     width <= 0 && return ""
     io = IOBuffer()
     used = 0
+    full = false
     stop = lastindex(line)
     i = firstindex(line)
     while i <= stop
@@ -93,9 +107,11 @@ function fit(line::AbstractString, width::Integer)
         else
             c = visible(c)
             w = textwidth(c)
-            used + w > width && break
-            write(io, c)
-            used += w
+            full = full || used + w > width
+            if !full
+                write(io, c)
+                used += w
+            end
             i = nextind(line, i)
         end
     end

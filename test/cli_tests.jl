@@ -35,6 +35,13 @@
     @test isnothing(basic.tail_lines)
     @test_throws Exception REPLicant._parse_args(["--head-lines=abc"])
     @test_throws Exception REPLicant._parse_args(["--tail-lines=-1"])
+
+    # The log cursor is a sequence number; unset is nothing.
+    @test REPLicant._parse_args(["--since", "12"]).since == 12
+    @test isnothing(basic.since)
+    @test_throws Exception REPLicant._parse_args(["--since=abc"])
+    @test_throws Exception REPLicant._parse_args(["--since="])
+    @test_throws Exception REPLicant._parse_args(["--since=-1"])
 end
 
 @testitem "client_elide" tags = [:cli] begin
@@ -589,6 +596,35 @@ end
     @test REPLicant._server_julia("1.10") == `julia +1.10`
 end
 
+@testitem "client_start_waits_for_its_own_server" tags = [:cli] begin
+    import REPLicant
+
+    # Another server registering for the same project during a start is not the
+    # one the start spawned; only the port the spawned server reports counts.
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            mktempdir() do root
+                cd(root) do
+                    server = REPLicant.Server(Module())
+                    port = take!(server.channel)
+                    child = run(`$(Base.julia_cmd()) --startup-file=no -e "sleep(30)"`; wait = false)
+                    portfile = tempname()
+                    try
+                        @test_throws ErrorException REPLicant._await_entry(
+                            portfile, child, tempname(); timeout = 1,
+                        )
+                        write(portfile, string(port))
+                        @test REPLicant._await_entry(portfile, child, tempname(); timeout = 5).port == port
+                    finally
+                        kill(child)
+                        close(server)
+                    end
+                end
+            end
+        end
+    end
+end
+
 @testitem "client_start_spawns_detached_server" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
@@ -667,6 +703,20 @@ end
         # Without walking, only the given directory itself is consulted.
         @test isnothing(REPLicant._manifest_julia_version(sub, false))
         @test REPLicant._manifest_julia_version(dir, false) == "1.10.4"
+
+        # A manifest versioned for the given minor takes precedence, as Julia's own
+        # lookup gives it; one for another minor is ignored.
+        write(
+            joinpath(dir, "Manifest-v1.11.toml"),
+            "julia_version = \"1.11.2\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test REPLicant._manifest_julia_version(dir, true, "1.11") == "1.11.2"
+        @test REPLicant._manifest_julia_version(dir, true, "1.12") == "1.10.4"
+        write(
+            joinpath(dir, "JuliaManifest-v1.11.toml"),
+            "julia_version = \"1.11.3\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test REPLicant._manifest_julia_version(dir, true, "1.11") == "1.11.3"
     end
 end
 
@@ -702,7 +752,7 @@ end
         try
             REPLicant._check_julia_version(
                 dir, "@.", "1.12";
-                manifest_version_of = (_, _) -> "1.11.8", channel_version_of = _ -> "1.12.5",
+                manifest_version_of = (_, _, _) -> "1.11.8", channel_version_of = _ -> "1.12.5",
             )
             @test false
         catch e
@@ -716,7 +766,7 @@ end
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@.", "1.12";
-                manifest_version_of = (_, _) -> "1.12.0", channel_version_of = _ -> "1.12.9",
+                manifest_version_of = (_, _, _) -> "1.12.0", channel_version_of = _ -> "1.12.9",
             ),
         )
 
@@ -725,7 +775,7 @@ end
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@.", "1.12";
-                manifest_version_of = (_, _) -> "unknown", channel_version_of = _ -> "1.12.5",
+                manifest_version_of = (_, _, _) -> "unknown", channel_version_of = _ -> "1.12.5",
             ),
         )
 
@@ -734,7 +784,7 @@ end
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@.", "";
-                manifest_version_of = (_, _) -> error("should not be called"),
+                manifest_version_of = (_, _, _) -> error("should not be called"),
                 channel_version_of = _ -> error("should not be called"),
             ),
         )
@@ -745,7 +795,7 @@ end
         @test isnothing(
             REPLicant._check_julia_version(
                 dir, "@somename", "1.12";
-                manifest_version_of = (_, _) -> error("should not be called"),
+                manifest_version_of = (_, _, _) -> error("should not be called"),
                 channel_version_of = _ -> error("should not be called"),
             ),
         )
@@ -811,6 +861,19 @@ end
             @test contains(message, "pinned to Julia 1.11.8")
             @test contains(message, "--project=$nested")
         end
+
+        # A manifest versioned for the channel's minor is the one Julia loads, so
+        # the plain manifest's other version does not block.
+        write(
+            joinpath(nested, "Manifest-v1.12.toml"),
+            "julia_version = \"1.12.5\"\nmanifest_format = \"2.0\"\n",
+        )
+        @test isnothing(
+            REPLicant._check_julia_version(
+                dir, nested, "1.12";
+                channel_version_of = _ -> "1.12.5",
+            ),
+        )
     end
 end
 

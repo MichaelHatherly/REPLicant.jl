@@ -35,8 +35,15 @@ end
     @test F.fit("hello", 0) == ""
 
     # Escape sequences occupy no display width and survive truncation.
-    @test F.fit("\e[31mhello\e[0m", 3) == "\e[31mhel"
+    @test F.fit("\e[31mhello\e[0m", 3) == "\e[31mhel\e[0m"
     @test F.fit("\e[31mab\e[0m", 10) == "\e[31mab\e[0m"
+
+    # An OSC sequence (here a hyperlink) runs to its terminator, ST or BEL, and the
+    # one that closes the link survives the cut.
+    link = "\e]8;;http://e\e\\link\e]8;;\e\\"
+    @test F.display_width(link) == 4
+    @test F.fit(link, 2) == "\e]8;;http://e\e\\li\e]8;;\e\\"
+    @test F.display_width("\e]8;;http://e\alink\e]8;;\a") == 4
 
     # Wide characters count as the width the terminal gives them.
     @test F.fit("日本語", 4) == "日本"
