@@ -330,7 +330,9 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
         errored = result.error
         if errored
             _error_message(buffer, result, id)
-        elseif _echo_object(result.value) && !_ends_with_semicolon(code)
+            # invokelatest: a package the eval loaded may add an echo rule, such as the
+            # Test extension's, in a newer world than this call runs in.
+        elseif Base.invokelatest(_echo_object, result.value)::Bool && !_ends_with_semicolon(code)
             errored = !_show_value(buffer, result.value, mod)
         end
 
