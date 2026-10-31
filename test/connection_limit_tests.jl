@@ -27,6 +27,30 @@
     end
 end
 
+@testitem "connection_limit_bounds_pending_rejections" tags = [:concurrent, :limits] setup =
+    [Utilities] begin
+    import REPLicant
+    import Sockets
+
+    Utilities.withserver(; max_connections = 1, max_pending_rejections = 1) do server, mod, port
+        held = Utilities.sendframe(Sockets.connect(Sockets.localhost, port), "sleep(1); 1")
+        sleep(0.1)
+        # A silent peer at capacity holds a rejection open for the full read timeout.
+        silent = Sockets.connect(Sockets.localhost, port)
+        sleep(0.1)
+
+        # With every rejection slot taken, the next peer is closed at once.
+        overflow = Sockets.connect(Sockets.localhost, port)
+        closed = @async eof(overflow)
+        @test timedwait(() -> istaskdone(closed), 5.0) === :ok
+
+        close(overflow)
+        close(silent)
+        @test strip(Utilities.readresp(held)) == "1"
+        close(held)
+    end
+end
+
 @testitem "connection_limit_with_rapid_turnover" tags = [:concurrent, :limits] setup =
     [Utilities] begin
     import REPLicant

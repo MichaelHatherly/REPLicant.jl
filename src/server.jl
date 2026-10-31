@@ -12,7 +12,8 @@ end
 SessionStore() = SessionStore(ReentrantLock(), Dict{String, Module}())
 
 """
-    Server([mod]; max_connections = 100, read_timeout_seconds = 30.0, save = false, verbose = false)
+    Server([mod]; max_connections = 100, max_pending_rejections = 4max_connections,
+           read_timeout_seconds = 30.0, save = false, verbose = false)
 
 Start a persistent Julia REPL server on a TCP socket. It binds a free port the
 OS assigns, registers itself in the registry (see [`install_channel`](@ref)), and
@@ -24,6 +25,8 @@ evaluates code from clients until closed.
   request, so the host can swap the target between calls. Omitted, requests
   evaluate into the active module.
 - `max_connections::Int = 100`: concurrent connections before new ones are rejected.
+- `max_pending_rejections::Int = 4max_connections`: rejections still reading their
+  request before further connections are closed without a reply.
 - `read_timeout_seconds::Float64 = 30.0`: per-request read timeout in seconds.
 - `save::Bool = false`: record the handle so [`server`](@ref) returns it. Use it
   from a session (e.g. `startup.jl`) that starts a server without keeping the
@@ -56,7 +59,8 @@ close(server)
 
 The server runs in its own task. Several can run per project; label one with
 [`label!`](@ref) to select it by name. The registry entry is removed on shutdown.
-At capacity, clients get an `err` frame carrying "Server at capacity, please retry".
+At capacity, clients get an `err` frame carrying "Server at capacity, please retry",
+until `max_pending_rejections` of them are waiting on it.
 """
 mutable struct Server
     task::Task
@@ -67,6 +71,7 @@ mutable struct Server
     # target between calls.
     mod::Base.Callable
     max_connections::Int
+    max_pending_rejections::Int
     read_timeout_seconds::Float64
     save::Bool
     verbose::Bool
@@ -96,6 +101,7 @@ mutable struct Server
     function Server(
             mod = nothing;
             max_connections::Int = 100,
+            max_pending_rejections::Int = 4max_connections,
             read_timeout_seconds::Float64 = READ_TIMEOUT_SECONDS,
             save::Bool = false,
             verbose::Bool = false,
@@ -104,6 +110,7 @@ mutable struct Server
         srv.channel = Channel{Int}(1)
         srv.mod = _default_target(mod)
         srv.max_connections = max_connections
+        srv.max_pending_rejections = max_pending_rejections
         srv.read_timeout_seconds = read_timeout_seconds
         srv.save = save
         srv.verbose = verbose
@@ -295,12 +302,14 @@ function _serve(server, srv::Server, entry_path)
 
     # Track active connections to enforce limits
     active_connections = Threads.Atomic{Int}(0)
+    # Rejections still draining their request, bounded so a flood cannot pile up tasks.
+    pending_rejections = Threads.Atomic{Int}(0)
 
     # Start the worker task that processes requests sequentially
     worker = _spawn_worker(request_queue, active_connections, srv)
 
     return try
-        _accept_loop(server, request_queue, active_connections, srv)
+        _accept_loop(server, request_queue, active_connections, pending_rejections, srv)
     catch error
         # A closed listener (`close`/atexit) surfaces as IOError from `accept`;
         # an explicit shutdown surfaces as InterruptException. Both are normal.
@@ -420,8 +429,9 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                     end
                     srv.interrupt_signal = signal
                     # A close between the check above and publishing the signal
-                    # found nothing to interrupt.
-                    isopen(request_queue) || notify(signal)
+                    # found nothing to interrupt. `close` holds the queue's lock, so
+                    # checking under it orders the publish against close's load.
+                    Base.@lock request_queue isopen(request_queue) || notify(signal)
                     _set_busy!(srv, Dates.now(), request.code)
                     try
                         wait(eval_task)
@@ -447,7 +457,9 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
 end
 
 # Accept connections forever, queuing each for the worker; reject at capacity.
-function _accept_loop(server, request_queue, active_connections, srv::Server)
+function _accept_loop(
+        server, request_queue, active_connections, pending_rejections, srv::Server,
+    )
     # Simple incrementing ID for request tracking in logs
     id = 0
     while true
@@ -455,7 +467,7 @@ function _accept_loop(server, request_queue, active_connections, srv::Server)
         # assert it so the socket stays concretely typed through the accept loop.
         sock = Sockets.accept(server)::Sockets.TCPSocket
         id += 1
-        _admit(sock, id, request_queue, active_connections, srv)
+        _admit(sock, id, request_queue, active_connections, pending_rejections, srv)
     end
     return
 end
@@ -465,13 +477,13 @@ end
 # arguments instead of the loop's reassigned `sock`/`id`, which would box.
 function _admit(
         sock::Sockets.TCPSocket, id::Int, request_queue::Channel{ClientRequest},
-        active_connections::Threads.Atomic{Int}, srv::Server,
+        active_connections::Threads.Atomic{Int}, pending_rejections::Threads.Atomic{Int},
+        srv::Server,
     )
     if active_connections[] >= srv.max_connections
         srv.verbose && @warn "Connection rejected - server at capacity" id current =
             active_connections[] max = srv.max_connections
-        # Reject off the accept loop so draining the request never blocks accepting.
-        @async _reject_at_capacity(sock, id, srv.token, srv.read_timeout_seconds)
+        _reject(sock, id, pending_rejections, srv)
     else
         Threads.atomic_add!(active_connections, 1)
         srv.verbose &&
@@ -480,6 +492,24 @@ function _admit(
         # Dispatch off the accept loop so reading the frame and answering a ping
         # never blocks accepting other connections.
         @async _dispatch(sock, id, request_queue, active_connections, srv)
+    end
+    return
+end
+
+# Reject off the accept loop so draining the request never blocks accepting. Past
+# `max_pending_rejections` the socket is closed without a reply.
+function _reject(
+        sock::Sockets.TCPSocket, id::Int, pending_rejections::Threads.Atomic{Int}, srv::Server,
+    )
+    if pending_rejections[] >= srv.max_pending_rejections
+        close(sock)
+        return
+    end
+    Threads.atomic_add!(pending_rejections, 1)
+    @async try
+        _reject_at_capacity(sock, id, srv.token, srv.read_timeout_seconds)
+    finally
+        Threads.atomic_sub!(pending_rejections, 1)
     end
     return
 end
