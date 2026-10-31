@@ -37,10 +37,13 @@ evaluates code from clients until closed.
 
 # Protocol
 Each message is a frame: a 10-byte header (`"REPL"` magic, a version byte, a type
-byte, then a big-endian `UInt32` body length) followed by the body. Every request
-body opens with the 64-character token from the server's registry entry, and the
-server rejects a request without it: any local user can reach the port, while
-only the owner can read the owner-only registry. Requests are `eval` (body carries the caller's working directory, the target session module, and
+byte, then a big-endian `UInt32` body length) followed by the body. Each connection
+opens with a `challenge` carrying a nonce, which the server answers with a `proof`:
+an HMAC-SHA256 of the nonce keyed by the 64-character token from its registry entry.
+The client checks it before sending anything else, so a process squatting on a dead
+server's port cannot pass as the server. Every request body then opens with the
+token, and the server rejects a request without it: any local user can reach the
+port, while only the owner can read the owner-only registry. Requests are `eval` (body carries the caller's working directory, the target session module, and
 the code), `ping`, `interrupt`, `reset` (body is a session module name), `log`, or
 `restart`; responses are `ok`/`err` (body is the result or error text) or `pong`
 (body is the worker's busy-since timestamp, empty when idle). An `interrupt`
@@ -522,7 +525,7 @@ end
 # its request failed.
 function _reject_at_capacity(sock::IO, id, srv::Server)
     return try
-        frame = _read_request(sock, srv.token, srv.read_timeout_seconds)
+        frame = _accept_request(sock, srv.token, srv.read_timeout_seconds)
         if !isnothing(frame) && frame.type == REQUEST_PING
             _write_frame(sock, RESPONSE_PONG, _busy_marker(srv))
         else
@@ -591,7 +594,7 @@ function _dispatch(
     restart = false
     shutdown = false
     try
-        frame = _read_request(sock, srv.token, srv.read_timeout_seconds)
+        frame = _accept_request(sock, srv.token, srv.read_timeout_seconds)
         if isnothing(frame)
             return  # bare disconnect, nothing to reply to
         elseif frame.type == REQUEST_PING

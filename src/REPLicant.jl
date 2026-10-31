@@ -32,6 +32,7 @@ const CLIENT_ONLY = get(Base.get_preferences(UUID), "mode", "server") == "client
 
 import Base.JuliaSyntax
 import Random
+import SHA
 import Sockets
 
 @static if !CLIENT_ONLY

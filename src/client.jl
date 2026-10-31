@@ -359,32 +359,32 @@ function _send(
         @nospecialize(head_lines::Union{Nothing, Int} = nothing),
         @nospecialize(tail_lines::Union{Nothing, Int} = nothing),
     )
-    sock = _open_request(port, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code))
-    try
-        frame = try
+    frame = try
+        sock = _open_request(port, REQUEST_EVAL, _encode_eval_body(; cwd, mod, code); timeout_seconds)
+        try
             _read_frame(sock, RESPONSE_TYPES; timeout_seconds, max_bytes = MAX_RESPONSE_BYTES)
-        catch timeout
-            timeout isa ReadTimeout || rethrow()
-            throw(
-                ErrorException(
-                    "evaluation did not respond within $(timeout.timeout_seconds)s; \
-                    the eval is still running on the server, and later evals wait \
-                    behind it. Free it with: \
-                    julia +rpc interrupt (or julia +rpc kill to stop the process).",
-                ),
-            )
+        finally
+            close(sock)
         end
-        isnothing(frame) && error(_dropped_message(port))
-        body = _elide(frame.body, head_lines, tail_lines)
-        if frame.type == RESPONSE_ERR
-            _write_payload(err, body)
-            return 1
-        end
-        _write_payload(out, body)
-        return 0
-    finally
-        close(sock)
+    catch timeout
+        timeout isa ReadTimeout || rethrow()
+        throw(
+            ErrorException(
+                "evaluation did not respond within $(timeout.timeout_seconds)s; \
+                the eval is still running on the server, and later evals wait \
+                behind it. Free it with: \
+                julia +rpc interrupt (or julia +rpc kill to stop the process).",
+            ),
+        )
     end
+    isnothing(frame) && error(_dropped_message(port))
+    body = _elide(frame.body, head_lines, tail_lines)
+    if frame.type == RESPONSE_ERR
+        _write_payload(err, body)
+        return 1
+    end
+    _write_payload(out, body)
+    return 0
 end
 
 # A dropped eval connection on a port that now refuses means the process ended,
@@ -716,7 +716,7 @@ end
 # Send one request answered off the worker queue and return the reply frame, erroring
 # when the server hangs up without one.
 function _exchange(port::Integer, type::UInt8, body::String)
-    sock = _open_request(port, type, body)
+    sock = _open_request(port, type, body; timeout_seconds = PING_TIMEOUT_SECONDS)
     frame = try
         _read_frame(sock, RESPONSE_TYPES; timeout_seconds = PING_TIMEOUT_SECONDS)
     finally

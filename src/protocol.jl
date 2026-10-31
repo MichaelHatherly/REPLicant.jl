@@ -9,13 +9,14 @@
 #   length   UInt32 (BE)  4 bytes  body byte count
 #   body     length bytes          UTF-8
 #
-# Request types are `eval`/`ping`/`interrupt`/`reset`/`log`/`restart`, response types
-# `ok`/`err`/`pong`. Every request body opens with the server's token (see
-# `_read_request`). After it, an `eval` body is structured (see `_encode_eval_body`);
-# the others are a name, a count, or empty. The type code is an open enum: new codes (a
-# `log` query, a serialized value, a MIME bundle) extend the protocol without a
-# format break. Every read validates magic, version, type, and length before
-# trusting the body.
+# Every connection opens with a handshake: the client sends a `challenge` and the
+# server answers with a `proof` (see `_verify_server`). Then comes one request, of type
+# `eval`/`ping`/`interrupt`/`reset`/`log`/`restart`, answered with `ok`/`err`/`pong`.
+# Every request body opens with the server's token (see `_read_request`). After it,
+# an `eval` body is structured (see `_encode_eval_body`); the others are a name, a
+# count, or empty. The type code is an open enum: new codes (a `log` query, a
+# serialized value, a MIME bundle) extend the protocol without a format break. Every
+# read validates magic, version, type, and length before trusting the body.
 #
 
 const READ_TIMEOUT_SECONDS = 30.0
@@ -36,7 +37,7 @@ const MAX_RESPONSE_BYTES = Int(min(typemax(UInt32), typemax(Int)))
 const VERSION_SKEW_HELP = "The client and server may be running different REPLicant versions. Reinstall the rpc channel: julia -e 'using REPLicant; REPLicant.install_channel(force = true)'"
 
 const PROTOCOL_MAGIC = Vector{UInt8}("REPL")
-const PROTOCOL_VERSION = 0x03
+const PROTOCOL_VERSION = 0x04
 const FRAME_HEADER_BYTES = length(PROTOCOL_MAGIC) + 6  # magic + version + type + UInt32 length
 
 const REQUEST_EVAL = 0x01
@@ -46,9 +47,11 @@ const REQUEST_RESET = 0x04
 const REQUEST_LOG = 0x05
 const REQUEST_RESTART = 0x06
 const REQUEST_SHUTDOWN = 0x07
+const REQUEST_CHALLENGE = 0x08
 const RESPONSE_OK = 0x01
 const RESPONSE_ERR = 0x02
 const RESPONSE_PONG = 0x03
+const RESPONSE_PROOF = 0x04
 
 const REQUEST_TYPES = (
     REQUEST_EVAL, REQUEST_PING, REQUEST_INTERRUPT, REQUEST_RESET, REQUEST_LOG, REQUEST_RESTART,
@@ -109,7 +112,7 @@ Base.showerror(io::IO, err::TruncatedFrame) =
 struct UnknownProtocol <: Exception
     magic::Vector{UInt8}
 end
-Base.showerror(io::IO, err::UnknownProtocol) = print(
+Base.showerror(io::IO, err::UnknownProtocol) = print(  # dendro-ignore: duplicate -- one message per error type
     io,
     "Unknown protocol: expected magic \"REPL\", got $(repr(String(copy(err.magic)))). $VERSION_SKEW_HELP",
 )
@@ -172,6 +175,46 @@ struct RequestError <: Exception
 end
 Base.showerror(io::IO, error::RequestError) = print(io, error.msg)
 
+# Any process can listen on a port whose server died without removing its registry
+# entry. The client sends a fresh nonce, and the server proves it holds the entry's
+# token by answering with an HMAC of the nonce keyed by it. The client sends its token
+# and request only once the proof checks out, so a squatter learns nothing it could
+# replay and cannot answer as the server.
+struct UnverifiedServer <: Exception
+    port::Int
+end
+Base.showerror(io::IO, err::UnverifiedServer) = print(  # dendro-ignore: duplicate -- one message per error type
+    io,
+    "the process on port $(err.port) did not prove it holds the token in that port's registry entry, so it is not the REPLicant server that registered it",
+)
+
+# A hex HMAC-SHA256, 64 characters like the token and the nonce.
+_proof(token::String, nonce::String) =
+    bytes2hex(SHA.hmac_sha256(Vector{UInt8}(token), Vector{UInt8}(nonce)))
+
+function _verify_server(sock::IO, port::Integer, token::String; timeout_seconds)
+    nonce = _new_token()
+    _write_frame(sock, REQUEST_CHALLENGE, nonce)
+    frame = _read_frame(
+        sock, (RESPONSE_PROOF, RESPONSE_TYPES...); timeout_seconds, max_bytes = TOKEN_LENGTH,
+    )
+    isnothing(frame) && error("server closed the connection without a response")
+    (frame.type == RESPONSE_PROOF && frame.body == _proof(token, nonce)) ||
+        throw(UnverifiedServer(port))
+    return nothing
+end
+
+# Answer the client's challenge, then read its request (see `_read_request`). Returns
+# `nothing` when the peer closes without sending.
+function _accept_request(sock::IO, token::String, timeout_seconds::Float64)
+    challenge = _read_frame(
+        sock, (REQUEST_CHALLENGE,); timeout_seconds, max_bytes = TOKEN_LENGTH,
+    )
+    isnothing(challenge) && return nothing
+    _write_frame(sock, RESPONSE_PROOF, _proof(token, challenge.body))
+    return _read_request(sock, token, timeout_seconds)
+end
+
 _write_request(io::IO, token::String, type::UInt8, body::String) =
     _write_frame(io, type, string(token, body))
 
@@ -217,12 +260,16 @@ function _discard_body(sock::IO, count::Int; timeout_seconds)
     return nothing
 end
 
-# Connect to the server on `port` and send one request carrying its registered
-# token. Returns the socket for the caller to read the reply from and close.
-function _open_request(port::Integer, type::UInt8, body::String)
+# Connect to the server on `port`, check that it holds its registered token, and send
+# one request carrying it. Returns the socket for the caller to read the reply from
+# and close. `timeout_seconds` bounds the wait for the proof, which a server wedged on
+# its only thread cannot send, so callers pass the bound they give the reply.
+function _open_request(port::Integer, type::UInt8, body::String; timeout_seconds)
     sock = Sockets.connect(Sockets.localhost, port)
     try
-        _write_request(sock, _entry_token(port), type, body)
+        token = _entry_token(port)
+        _verify_server(sock, port, token; timeout_seconds)
+        _write_request(sock, token, type, body)
     catch
         close(sock)
         rethrow()

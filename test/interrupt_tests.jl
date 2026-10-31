@@ -139,13 +139,14 @@ end
     # A stand-in server that answers its liveness ping, then rejects the interrupt
     # the way a server at capacity does.
     port, listener = Sockets.listenany(0)
+    token = REPLicant._new_token()
     responder = @async while isopen(listener)
         sock = try
             Sockets.accept(listener)
         catch
             break
         end
-        frame = REPLicant._read_frame(sock, REPLicant.REQUEST_TYPES)
+        frame = REPLicant._accept_request(sock, token, 30.0)
         if frame.type == REPLicant.REQUEST_PING
             REPLicant._write_frame(sock, REPLicant.RESPONSE_PONG, "")
         else
@@ -156,7 +157,7 @@ end
     try
         mktempdir() do registry
             withenv("REPLICANT_DIR" => registry) do
-                REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                REPLicant._write_registry_entry(port, "/work/a"; token)
                 out, err = IOBuffer(), IOBuffer()
                 @test REPLicant._interrupt_server(["--port=$port"]; out, err) == 1
                 @test contains(String(take!(err)), "Server at capacity")

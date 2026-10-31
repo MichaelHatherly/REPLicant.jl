@@ -18,7 +18,7 @@ should stay invisible to the project you are working on.
 Keep these when changing the package. They explain why the design looks the way it
 does.
 
-- **stdlib-only at runtime.** Runtime deps are `Dates`, `Logging`, `Random`,
+- **stdlib-only at runtime.** Runtime deps are `Dates`, `Logging`, `Random`, `SHA`,
   `Sockets`, plus `PrecompileTools`. The capture path was reimplemented to drop
   IOCapture rather than carry the dependency. A new runtime dep needs a strong
   reason. Optional integrations belong in extensions (Revise, Test as weakdeps).
