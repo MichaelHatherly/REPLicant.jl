@@ -167,8 +167,5 @@ end
 @testitem "server_with_test_extension_compiles_nothing_of_its_own_at_runtime" tags = [:precompile] setup = [Precompiled] begin
     result = Precompiled.runtime_compiles("import Test;")
     @test Precompiled.compiling_clients(result) == []
-    # Julia 1.10 keeps REPL in its sysimage, so the REPL extension loads alongside
-    # Test. Each extension's image is built without the other, and together they
-    # invalidate the eval path both recompiled, so its first eval compiles it again.
-    @test result.server == String[] broken = VERSION < v"1.11"
+    @test result.server == String[]
 end
