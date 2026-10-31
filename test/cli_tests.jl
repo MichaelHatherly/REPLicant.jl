@@ -596,6 +596,35 @@ end
     @test REPLicant._server_julia("1.10") == `julia +1.10`
 end
 
+@testitem "client_start_waits_for_its_own_server" tags = [:cli] begin
+    import REPLicant
+
+    # Another server registering for the same project during a start is not the
+    # one the start spawned; only the port the spawned server reports counts.
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            mktempdir() do root
+                cd(root) do
+                    server = REPLicant.Server(Module())
+                    port = take!(server.channel)
+                    child = run(`$(Base.julia_cmd()) --startup-file=no -e "sleep(30)"`; wait = false)
+                    portfile = tempname()
+                    try
+                        @test_throws ErrorException REPLicant._await_entry(
+                            portfile, child, tempname(); timeout = 1,
+                        )
+                        write(portfile, string(port))
+                        @test REPLicant._await_entry(portfile, child, tempname(); timeout = 5).port == port
+                    finally
+                        kill(child)
+                        close(server)
+                    end
+                end
+            end
+        end
+    end
+end
+
 @testitem "client_start_spawns_detached_server" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 

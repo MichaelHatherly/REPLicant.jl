@@ -635,12 +635,12 @@ function _start_server(args::Vector{String}; out::IO = stdout)
 
     # The detached server runs the same recipe an interactive session does: start,
     # wait for the port, optionally label, then block on the server task forever.
+    # It reports its port through `portfile`, so another server registering for
+    # the same project meanwhile is not mistaken for it.
     label = isempty(parsed.name) ? "" : "REPLicant.label!($(repr(parsed.name))); "
-    script = "using REPLicant; s = REPLicant.Server(save = true); take!(s.channel); $(label)wait(s.task)"
-
-    # Snapshot the live servers (pruning dead ones) so the new entry is identified as
-    # the one that appears for this project afterward, even across a reused port.
-    before = Set(entry.port for entry in _live_entries())
+    portfile = tempname()
+    script = "using REPLicant; s = REPLicant.Server(save = true); p = take!(s.channel); \
+        $(label)write($(repr(portfile)), string(p)); wait(s.task)"
 
     # Capture the detached server's stderr so a startup failure (REPLicant missing,
     # a precompile error) surfaces in the error instead of vanishing into devnull.
@@ -656,7 +656,11 @@ function _start_server(args::Vector{String}; out::IO = stdout)
     process =
         run(pipeline(command; stdin = devnull, stdout = devnull, stderr = log); wait = false)
 
-    entry = _await_entry(root, before, process, log)
+    entry = try
+        _await_entry(portfile, process, log)
+    finally
+        rm(portfile; force = true)
+    end
     println(out, "started REPLicant server on port $(entry.port) for $(entry.project) (log: $log)")
     return 0
 end
@@ -668,20 +672,22 @@ function _start_log(log::AbstractString)
     return "; server stderr:\n" * read(log, String)
 end
 
-# Wait for the spawned server to register: a live entry rooted at `root` whose port
-# is new since `before`. Matching the entry rather than the spawned process's pid is
-# what works when `julia` is a launcher (the juliaup shim, or a detached PATH spawn
-# on Windows) that runs the server as a child with a different pid. Fails fast when
-# the process exits before registering, surfacing its captured stderr. The timeout is
+# Wait for the spawned server to register: the live entry on the port it wrote to
+# `portfile`. The server reports its own port because the spawned process's pid
+# does not identify it when `julia` is a launcher (the juliaup shim, or a detached
+# PATH spawn on Windows) that runs the server as a child. Fails fast when the
+# process exits before registering, surfacing its captured stderr. The timeout is
 # generous because a first start on a channel where REPLicant is not yet precompiled
 # builds its package image before the server can register.
-function _await_entry(root::AbstractString, before::Set{Int}, process, log::AbstractString; timeout = 180)
+function _await_entry(portfile::AbstractString, process, log::AbstractString; timeout = 180)
     deadline = time() + timeout
     while time() < deadline
-        for entry in _read_entries()
-            entry.port in before && continue
-            _canonical(entry.project) == root || continue
-            _ping(entry.port) && return entry
+        # A partly written file parses as nothing and is read again next round.
+        port = isfile(portfile) ? tryparse(Int, read(portfile, String)) : nothing
+        if !isnothing(port)
+            for entry in _read_entries()
+                entry.port == port && _ping(port) && return entry
+            end
         end
         Base.process_exited(process) &&
             error("the server process exited before registering$(_start_log(log))")
