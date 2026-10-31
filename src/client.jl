@@ -819,31 +819,35 @@ const RESTART_SECONDS = 180
 function _restart_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     parsed = _parse_args(args)
     entry = _kill_target(parsed.port, parsed.project, parsed.name; err)
+    siblings = Set(e.started for e in _read_entries() if e.pid == entry.pid)
     frame = _exchange(entry.port, REQUEST_RESTART, "")
     if frame.type == RESPONSE_ERR
         println(err, "replicant: $(frame.body)")
         return 1
     end
-    restarted = _await_restart(entry)
+    restarted = _await_restart(entry, siblings)
     println(out, "restarted REPLicant server (pid $(entry.pid)), now on port $(restarted.port)")
     return 0
 end
 
-# Poll the registry for the restarted server: an entry with the old pid, a new start
-# time, and a socket that answers. Fails fast if the process exits instead.
-function _await_restart(old::RegistryEntry)
+# Poll the registry for the restarted server: an entry with the old pid, a socket
+# that answers, and a start time not in `siblings`, the start times of the pid's
+# entries before the restart was sent. A process can host several servers, and
+# the siblings stay registered until the re-exec runs their exit hooks. Fails fast
+# if the process exits instead.
+function _await_restart(old::RegistryEntry, siblings::Set{String}; timeout = RESTART_SECONDS)
     pid = parse(Int, old.pid)
-    deadline = time() + RESTART_SECONDS
+    deadline = time() + timeout
     while time() < deadline
         for entry in _read_entries()
-            (entry.pid == old.pid && entry.started != old.started) || continue
+            (entry.pid == old.pid && entry.started ∉ siblings) || continue
             _ping(entry.port) && return entry
         end
         _process_alive(pid) || error("the server process (pid $pid) exited during restart")
         sleep(0.1)
     end
     return error(
-        "the server (pid $pid) did not register again within $(RESTART_SECONDS)s; \
+        "the server (pid $pid) did not register again within $(timeout)s; \
         its terminal shows why",
     )
 end
