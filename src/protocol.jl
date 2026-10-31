@@ -112,7 +112,7 @@ Base.showerror(io::IO, err::TruncatedFrame) =
 struct UnknownProtocol <: Exception
     magic::Vector{UInt8}
 end
-Base.showerror(io::IO, err::UnknownProtocol) = print(
+Base.showerror(io::IO, err::UnknownProtocol) = print(  # dendro-ignore: duplicate -- one message per error type
     io,
     "Unknown protocol: expected magic \"REPL\", got $(repr(String(copy(err.magic)))). $VERSION_SKEW_HELP",
 )
@@ -183,7 +183,7 @@ Base.showerror(io::IO, error::RequestError) = print(io, error.msg)
 struct UnverifiedServer <: Exception
     port::Int
 end
-Base.showerror(io::IO, err::UnverifiedServer) = print(
+Base.showerror(io::IO, err::UnverifiedServer) = print(  # dendro-ignore: duplicate -- one message per error type
     io,
     "the process on port $(err.port) did not prove it holds the token in that port's registry entry, so it is not the REPLicant server that registered it",
 )
