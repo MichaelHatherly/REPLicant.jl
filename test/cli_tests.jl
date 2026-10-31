@@ -35,6 +35,13 @@
     @test isnothing(basic.tail_lines)
     @test_throws Exception REPLicant._parse_args(["--head-lines=abc"])
     @test_throws Exception REPLicant._parse_args(["--tail-lines=-1"])
+
+    # The log cursor is a sequence number; unset is nothing.
+    @test REPLicant._parse_args(["--since", "12"]).since == 12
+    @test isnothing(basic.since)
+    @test_throws Exception REPLicant._parse_args(["--since=abc"])
+    @test_throws Exception REPLicant._parse_args(["--since="])
+    @test_throws Exception REPLicant._parse_args(["--since=-1"])
 end
 
 @testitem "client_elide" tags = [:cli] begin

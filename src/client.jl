@@ -264,6 +264,8 @@ function _parse_args(args::Vector{String})
         _parse_number(Int, values["--head-lines"], >=(0), "--head-lines") : nothing
     tail_lines = haskey(values, "--tail-lines") ?
         _parse_number(Int, values["--tail-lines"], >=(0), "--tail-lines") : nothing
+    since = haskey(values, "--since") ?
+        _parse_number(Int, values["--since"], >=(0), "--since") : nothing
     code = get(values, "-e", get(values, "--eval", nothing))
     isnothing(file) ||
         isnothing(code) ||
@@ -275,7 +277,7 @@ function _parse_args(args::Vector{String})
         dir = get(values, "--dir", ""),
         mod = get(values, "--module", ""),
         channel = get(values, "--channel", ""),
-        since = get(values, "--since", ""),
+        since,
         code,
         file,
         script_args,
@@ -730,7 +732,7 @@ function _log_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
         rest = rest[2:end]
     end
     parsed = _parse_args(rest)
-    body = isempty(parsed.since) ? count : "since=$(parsed.since)"
+    body = isnothing(parsed.since) ? count : "since=$(parsed.since)"
     target = _resolve_port(parsed.port, parsed.project, parsed.name; err)
     frame = _exchange(target, REQUEST_LOG, body)
     if frame.type == RESPONSE_ERR
