@@ -112,3 +112,23 @@ end
         end
     end
 end
+
+@testitem "registry_dir_refuses_symlink" tags = [:server_lifecycle, :token] begin
+    import REPLicant
+
+    # Another user can plant the shared-temp name as a link to one of your own
+    # directories; following it would pass the owner check and tighten the target.
+    if !Sys.iswindows()
+        mktempdir() do parent
+            target = joinpath(parent, "target")
+            mkdir(target)
+            chmod(target, 0o755)
+            link = joinpath(parent, "registry")
+            symlink(target, link)
+            withenv("REPLICANT_DIR" => link) do
+                @test_throws ErrorException REPLicant._registry_dir()
+            end
+            @test filemode(target) & 0o777 == 0o755
+        end
+    end
+end

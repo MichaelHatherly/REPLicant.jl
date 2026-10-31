@@ -12,7 +12,13 @@ function _registry_dir()
     else
         uid = Libc.getuid()
         mkpath(dir; mode = 0o700)
-        stat(dir).uid == uid || error(
+        # `lstat`: a symlink planted in a shared temp dir could point at a directory
+        # of yours, pass the owner check, and be swapped before an entry is written.
+        info = lstat(dir)
+        islink(info) && error(
+            "REPLicant registry $dir is a symlink; refusing to use it. Set REPLICANT_DIR to a directory you own.",
+        )
+        info.uid == uid || error(
             "REPLicant registry $dir is owned by another user; refusing to use it. Set REPLICANT_DIR to a directory you own.",
         )
         filemode(dir) & 0o077 == 0 || chmod(dir, 0o700)
