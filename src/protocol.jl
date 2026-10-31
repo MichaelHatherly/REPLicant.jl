@@ -288,20 +288,6 @@ function _read_body(sock::IO, count::Int; timeout_seconds)
     return body
 end
 
-# Drain the client's framed request before replying so it completes its write and
-# reads the rejection, rather than hitting EPIPE on flush against a socket we
-# already closed. A peer without the token is dropped once its token fails.
-function _reject_at_capacity(sock::IO, id, token::String, read_timeout_seconds)
-    return try
-        _read_request(sock, token, read_timeout_seconds)
-        _write_frame(sock, RESPONSE_ERR, "Server at capacity, please retry")
-    catch error
-        @debug "Failed to send capacity error to client" id error
-    finally
-        close(sock)
-    end
-end
-
 # Log a handler failure and try to tell the client, tolerating a socket the peer
 # has already closed. A foreign peer is routine traffic and logs at debug only.
 function _reply_error(sock::IO, id::Integer, error)

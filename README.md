@@ -236,7 +236,8 @@ REPLicant executes arbitrary code with full system access.
 - Each connection is handled in a separate task
 - Concurrent requests share global state and can interfere
 - `max_connections` (default 100) bounds concurrent connections
-- At capacity, new connections receive `ERROR: Server at capacity, please retry`
+- At capacity, new connections receive `ERROR: Server at capacity, please retry`.
+  Pings are still answered, so `ls` and server selection keep a full server
 
 ### Limits
 

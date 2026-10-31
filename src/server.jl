@@ -59,8 +59,9 @@ close(server)
 
 The server runs in its own task. Several can run per project; label one with
 [`label!`](@ref) to select it by name. The registry entry is removed on shutdown.
-At capacity, clients get an `err` frame carrying "Server at capacity, please retry",
-until `max_pending_rejections` of them are waiting on it.
+At capacity, pings still get a pong and other requests get an `err` frame carrying
+"Server at capacity, please retry", until `max_pending_rejections` of them are
+waiting on it.
 """
 mutable struct Server
     task::Task
@@ -507,11 +508,31 @@ function _reject(
     end
     Threads.atomic_add!(pending_rejections, 1)
     @async try
-        _reject_at_capacity(sock, id, srv.token, srv.read_timeout_seconds)
+        _reject_at_capacity(sock, id, srv)
     finally
         Threads.atomic_sub!(pending_rejections, 1)
     end
     return
+end
+
+# Drain the client's framed request before replying so it completes its write and
+# reads the rejection, rather than hitting EPIPE on flush against a socket we
+# already closed. A peer without the token is dropped once its token fails. A ping
+# still gets its pong, so a client reads a full server as live and then sees why
+# its request failed.
+function _reject_at_capacity(sock::IO, id, srv::Server)
+    return try
+        frame = _read_request(sock, srv.token, srv.read_timeout_seconds)
+        if !isnothing(frame) && frame.type == REQUEST_PING
+            _write_frame(sock, RESPONSE_PONG, _busy_marker(srv))
+        else
+            _write_frame(sock, RESPONSE_ERR, "Server at capacity, please retry")
+        end
+    catch error
+        @debug "Failed to send capacity error to client" id error
+    finally
+        close(sock)
+    end
 end
 
 # The pong body: the worker's busy-since timestamp, or empty when idle. Clients
