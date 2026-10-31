@@ -6,13 +6,11 @@
 # regardless of which project each server runs in. Entries carry each server's
 # token, so the directory is owner-only. Windows gives each user its own temp dir.
 function _registry_dir()
+    dir = get(ENV, "REPLICANT_DIR", _default_registry_dir())
     @static if Sys.iswindows()
-        dir = get(ENV, "REPLICANT_DIR", joinpath(tempdir(), "replicant"))
         mkpath(dir)
     else
         uid = Libc.getuid()
-        # Per-user name, since a shared `/tmp` would let one user lock out the rest.
-        dir = get(ENV, "REPLICANT_DIR", joinpath(tempdir(), "replicant-$uid"))
         mkpath(dir; mode = 0o700)
         stat(dir).uid == uid || error(
             "REPLicant registry $dir is owned by another user; refusing to use it. Set REPLICANT_DIR to a directory you own.",
@@ -20,6 +18,15 @@ function _registry_dir()
         filemode(dir) & 0o077 == 0 || chmod(dir, 0o700)
     end
     return dir
+end
+
+@static if Sys.iswindows()
+    _default_registry_dir() = joinpath(tempdir(), "replicant")
+else
+    # Per-user name, since a shared `/tmp` would let one user lock out the rest. `string`
+    # the uid first: interpolating it prints through runtime dispatch, which the
+    # image does not keep.
+    _default_registry_dir() = joinpath(tempdir(), "replicant-" * string(Libc.getuid()))
 end
 
 _registry_entry_path(port::Integer) = joinpath(_registry_dir(), string(port))
@@ -222,20 +229,22 @@ function label!(name::AbstractString)
     return label!(srv, name)
 end
 
-function label!(srv::Server, name::AbstractString)
-    occursin('\n', name) && error("REPLicant label must not contain a newline.")
-    # A server has bound its port and published its details by the time a caller
-    # holds a label-worthy handle; assert it to drop the `nothing` branch.
-    port = srv.port::Int
-    project = srv.project::String
-    started = srv.started::Dates.DateTime
-    # An empty name clears the label, and no server holds it.
-    conflict = isempty(name) ? nothing : _label_conflict(project, name, port)
-    isnothing(conflict) || error(
-        "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
-    )
-    _write_registry_entry(port, project; srv.token, name, started)
-    srv.name = name
-    srv.verbose && @info "Labeled REPLicant server" port name
-    return name
+@static if !CLIENT_ONLY
+    function label!(srv::Server, name::AbstractString)
+        occursin('\n', name) && error("REPLicant label must not contain a newline.")
+        # A server has bound its port and published its details by the time a caller
+        # holds a label-worthy handle; assert it to drop the `nothing` branch.
+        port = srv.port::Int
+        project = srv.project::String
+        started = srv.started::Dates.DateTime
+        # An empty name clears the label, and no server holds it.
+        conflict = isempty(name) ? nothing : _label_conflict(project, name, port)
+        isnothing(conflict) || error(
+            "A REPLicant server in $project is already labeled \"$name\" (port $conflict).",
+        )
+        _write_registry_entry(port, project; srv.token, name, started)
+        srv.name = name
+        srv.verbose && @info "Labeled REPLicant server" port name
+        return name
+    end
 end

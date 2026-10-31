@@ -68,5 +68,18 @@ function install_channel(; force::Bool = false)
     # Quiet so linking at precompile time produces no output.
     run(_quiet(`juliaup link $RPC_CHANNEL $julia -- --startup-file=no $script`))
     @debug "Linked juliaup channel" channel = RPC_CHANNEL script
+    _build_client_image()
     return true
+end
+
+# Run the channel once, detached, so its client-only image is built before a client
+# call needs it; after a REPLicant change the first call would otherwise build it.
+# With no juliaup or no channel the run fails quietly in the background. Never while
+# precompiling: the build would wait on the precompile lock this process holds.
+function _build_client_image()
+    ccall(:jl_generating_output, Cint, ()) == 1 && return nothing
+    julia = Sys.which("julia")
+    isnothing(julia) && return nothing
+    run(_quiet(`$julia +$RPC_CHANNEL help`); wait = false)
+    return nothing
 end

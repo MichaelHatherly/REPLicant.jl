@@ -1,0 +1,5 @@
+[deps]
+REPLicant = "8acbef56-6722-412a-9f59-5674813d37bb"
+
+[preferences.REPLicant]
+mode = "client"

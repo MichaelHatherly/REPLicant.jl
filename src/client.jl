@@ -4,13 +4,23 @@
 
 # The client's output stream, whatever it is underneath: a pipe under an agent, a
 # file when redirected, a terminal under a human. One concrete type means the code
-# below `cli` compiles once, at precompile time, for all of them.
+# below `cli` compiles once, at precompile time, for all of them. Writes go to the
+# stream under any `IOContext`, which Julia wraps `stdout` in when color is forced,
+# so they reach the stream methods Base already compiled.
 struct Output <: IO
     io::IO
+    stream::IO
 end
-Base.unsafe_write(o::Output, p::Ptr{UInt8}, n::UInt) = unsafe_write(o.io, p, n)
-Base.write(o::Output, b::UInt8) = write(o.io, b)
-Base.flush(o::Output) = flush(o.io)
+function Output(@nospecialize(io::IO))
+    stream = io
+    while stream isa Base.IOContext
+        stream = stream.io
+    end
+    return Output(io, stream)
+end
+Base.unsafe_write(o::Output, p::Ptr{UInt8}, n::UInt) = unsafe_write(o.stream, p, n)
+Base.write(o::Output, b::UInt8) = write(o.stream, b)
+Base.flush(o::Output) = flush(o.stream)
 Base.get(o::Output, key, default) = get(o.io, key, default)
 Base.displaysize(o::Output) = displaysize(o.io)
 
@@ -47,11 +57,17 @@ function _read_entries()
 end
 
 # Entries whose servers answer a ping, pruning the registry files of servers that are
-# gone. A busy server that cannot pong is left out but keeps its entry.
+# gone. A busy server that cannot pong is left out but keeps its entry. The pings run
+# concurrently, so selection waits on the slowest server, not the sum of them.
 function _live_entries()
     live = RegistryEntry[]
-    for entry in _read_entries()
-        if _ping(entry.port)
+    entries = _read_entries()
+    answered = fill(false, length(entries))
+    @sync for (index, entry) in enumerate(entries)
+        @async answered[index] = _ping(entry.port)
+    end
+    for (entry, pong) in zip(entries, answered)
+        if pong
             push!(live, entry)
         elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
@@ -381,16 +397,27 @@ end
 # seconds. A marker that does not parse still reads as busy rather than crashing.
 function _format_status(marker::AbstractString)
     isempty(marker) && return "idle"
-    since = tryparse(Dates.DateTime, marker)
-    isnothing(since) && return "busy"
-    seconds = max(0, round(Int, (Dates.now() - since).value / 1000))
+    # The marker is the server's local `DateTime`. `strptime` stops at its
+    # milliseconds, and `isdst = -1` lets `mktime` place it either side of a DST change.
+    since = try
+        Libc.strptime("%Y-%m-%dT%H:%M:%S", marker)
+    catch  # dendro-ignore: empty_catch -- a marker that does not parse reads as busy
+        return "busy"
+    end
+    since.isdst = -1
+    millis = something(tryparse(Int, last(split(marker, '.'; limit = 2))), 0)
+    seconds = max(0, round(Int, time() - time(since) - millis / 1000))
     return "busy $(seconds)s"
 end
 
 function _list_servers(out::IO = stdout)
     rows = Tuple{RegistryEntry, String}[]
-    for entry in _read_entries()
-        status = _ping_status(entry.port)
+    entries = _read_entries()
+    statuses = Vector{Union{Nothing, String}}(nothing, length(entries))
+    @sync for (index, entry) in enumerate(entries)
+        @async statuses[index] = _ping_status(entry.port)
+    end
+    for (entry, status) in zip(entries, statuses)
         if !isnothing(status)
             push!(rows, (entry, _format_status(status)))
         elseif _server_gone(entry.port, entry.pid)

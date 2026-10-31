@@ -13,11 +13,29 @@
         return `$exec --startup-file=no --project=$(pkgdir(REPLicant))`
     end
 
-    # The methods a process compiled at runtime that REPLicant owns or specializes on.
-    # A process that compiled nothing leaves no trace file.
-    function owned_compiles(trace)
-        isfile(trace) || return String[]
-        return filter(line -> contains(line, "REPLicant"), readlines(trace))
+    # The methods a process compiled at runtime. A process that compiled nothing leaves
+    # no trace file.
+    compiles(trace) = isfile(trace) ? readlines(trace) : String[]
+
+    # Whether a compiled method is one REPLicant owns or specializes on, or a socket
+    # callback libuv calls on its connections.
+    owned(line) = contains(line, "REPLicant") || contains(line, "Sockets")
+    owned_compiles(trace) = filter(owned, compiles(trace))
+
+    # The compiles a client is held to. Before Julia 1.12 a package image cannot keep
+    # a Base method over Base types, even with a `precompile` directive, and which of
+    # them a client compiles varies from run to run, so only REPLicant's own count.
+    client_held(lines) = VERSION < v"1.12" ? filter(owned, lines) : lines
+
+    # What a client process compiles just to start and load the client build, which no
+    # workload of REPLicant's can reach.
+    function client_baseline(julia, env, tmp)
+        script = joinpath(tmp, "baseline.jl")
+        client_mode = joinpath(pkgdir(REPLicant), "bin", "client-mode")
+        write(script, "push!(LOAD_PATH, $(repr(client_mode)))\nusing REPLicant\nexit(0)\n")
+        trace = joinpath(tmp, "baseline.txt")
+        run(setenv(`$julia --trace-compile=$trace $script`, env))
+        return compiles(trace)
     end
 
     # Start a server the way `julia +rpc start` does, after running `preamble` (which
@@ -42,11 +60,12 @@
             try
                 port = wait_for_port(registry, proc)
                 client = joinpath(pkgdir(REPLicant), "bin", "client.jl")
+                baseline = client_baseline(julia, env, tmp)
                 for (index, args) in enumerate(client_commands(port))
                     trace = joinpath(tmp, "client-$index.txt")
                     command = setenv(`$julia --trace-compile=$trace $client $args`, env; dir = work)
                     finished = finishes(pipeline(ignorestatus(command); stdin = devnull, stdout = devnull, stderr = devnull))
-                    push!(clients, args => finished ? owned_compiles(trace) : ["timed out"])
+                    push!(clients, args => finished ? client_held(setdiff(compiles(trace), baseline)) : ["timed out"])
                 end
                 finishes(proc) || return (; clients, server = ["did not exit"; readlines(log)])
             finally
@@ -98,7 +117,7 @@
         ]
     end
 
-    # The client commands that compiled anything of REPLicant's.
+    # The client commands that compiled anything at runtime, or the server's own code.
     compiling_clients(result) = filter(pair -> !isempty(last(pair)), result.clients)
 end
 

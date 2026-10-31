@@ -212,9 +212,7 @@ end
 
     # A timestamp marks a busy server, rendered with elapsed seconds.
     marker = string(Dates.now() - Dates.Second(5))
-    rendered = REPLicant._format_status(marker)
-    @test contains(rendered, "busy")
-    @test contains(rendered, "s")
+    @test REPLicant._format_status(marker) == "busy 5s"
 
     # A garbled marker still reads as busy rather than crashing.
     @test contains(REPLicant._format_status("not-a-date"), "busy")
@@ -960,16 +958,10 @@ end
 
     # An agent runs the client with stdout and stderr on pipes. Any REPLicant method
     # compiled at runtime there is JIT cost the client pays on every call. The
-    # subprocess runs unbounded, so build its image first, as `start` does.
+    # subprocess runs unbounded, so build the client's image first.
     project = pkgdir(REPLicant)
-    run(
-        pipeline(
-            `julia --project=$project --startup-file=no -e "using REPLicant"`;
-            stdout = devnull,
-            stderr = devnull,
-        ),
-    )
     client = joinpath(project, "bin", "client.jl")
+    run(pipeline(`julia --project=$project --startup-file=no $client help`; stdout = devnull, stderr = devnull))
     Utilities.withserver() do server, mod, port
         trace = tempname()
         cmd = `julia --project=$project --startup-file=no --trace-compile=stderr $client --port=$port -e "1 + 1"`
