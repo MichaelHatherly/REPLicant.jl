@@ -591,7 +591,7 @@ function _check_julia_version(
     isnothing(channel_version) && return nothing
     function _minor(v::String)
         m = match(r"^(\d+\.\d+)", v)
-        return isnothing(m) ? nothing : String(m.captures[1])
+        return isnothing(m) ? nothing : m.captures[1]
     end
     channel_minor = _minor(channel_version)
     isnothing(channel_minor) && return nothing

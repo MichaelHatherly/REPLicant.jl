@@ -38,19 +38,21 @@ over them without counting them as text.
 function escape_end(line::AbstractString, i::Integer)
     stop = lastindex(line)
     j = nextind(line, i)
-    if j <= stop && line[j] == '['
+    j <= stop || return j
+    introducer = line[j]
+    if introducer == '['
         j = nextind(line, j)
         while j <= stop && !('\u40' <= line[j] <= '\u7e')
             j = nextind(line, j)
         end
-    elseif j <= stop && line[j] in (']', 'P', '_', '^')
+    elseif introducer in (']', 'P', '_', '^')
         # A string sequence (OSC, DCS, APC, PM) ends at BEL or at ST, `ESC \`.
+        previous = introducer
         j = nextind(line, j)
-        while j <= stop && line[j] != '\a'
-            if line[j] == '\e' && nextind(line, j) <= stop && line[nextind(line, j)] == '\\'
-                j = nextind(line, j)
-                break
-            end
+        while j <= stop
+            c = line[j]
+            (c == '\a' || (previous == '\e' && c == '\\')) && break
+            previous = c
             j = nextind(line, j)
         end
     end

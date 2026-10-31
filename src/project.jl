@@ -40,7 +40,7 @@ end
 # helper, always called with its already-`String` `search_dir` local. `minor`
 # ("1.11") is the Julia that will load the environment: its versioned manifests
 # come first, in the order `Base.manifest_names` gives them.
-function _manifest_julia_version(dir::String, walk::Bool = true, minor::Union{Nothing, String} = nothing)
+function _manifest_julia_version(dir::String, walk::Bool = true, minor::Union{Nothing, AbstractString} = nothing)
     versioned = isnothing(minor) ? String[] : ["JuliaManifest-v$minor.toml", "Manifest-v$minor.toml"]
     manifest_names = [versioned; "JuliaManifest.toml"; "Manifest.toml"]
     probe = _canonical(dir)
