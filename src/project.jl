@@ -37,13 +37,17 @@ end
 # when no project is found, or its manifest has never been resolved (no
 # Manifest.toml yet, or a pre-`julia_version`-field manifest) -- nothing to
 # compare against. Concrete `String`: this is `_check_julia_version`'s private
-# helper, always called with its already-`String` `search_dir` local.
-function _manifest_julia_version(dir::String, walk::Bool = true)
+# helper, always called with its already-`String` `search_dir` local. `minor`
+# ("1.11") is the Julia that will load the environment: its versioned manifests
+# come first, in the order `Base.manifest_names` gives them.
+function _manifest_julia_version(dir::String, walk::Bool = true, minor::Union{Nothing, String} = nothing)
+    versioned = isnothing(minor) ? String[] : ["JuliaManifest-v$minor.toml", "Manifest-v$minor.toml"]
+    manifest_names = [versioned; "JuliaManifest.toml"; "Manifest.toml"]
     probe = _canonical(dir)
     while true
         for project_name in ("JuliaProject.toml", "Project.toml")
             isfile(joinpath(probe, project_name)) || continue
-            for manifest_name in ("JuliaManifest.toml", "Manifest.toml")
+            for manifest_name in manifest_names
                 manifest_file = joinpath(probe, manifest_name)
                 isfile(manifest_file) || continue
                 m = match(r"^julia_version\s*=\s*\"([^\"]+)\""m, read(manifest_file, String))

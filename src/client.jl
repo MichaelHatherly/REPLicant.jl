@@ -587,17 +587,18 @@ function _check_julia_version(
         path = abspath(dir, project)
         isdir(path) ? path : dirname(path)
     end
-    manifest_version = manifest_version_of(search_dir, walk)::Union{Nothing, String}
-    isnothing(manifest_version) && return nothing
     channel_version = channel_version_of(channel)::Union{Nothing, String}
     isnothing(channel_version) && return nothing
     function _minor(v::String)
         m = match(r"^(\d+\.\d+)", v)
-        return isnothing(m) ? nothing : m.captures[1]
+        return isnothing(m) ? nothing : String(m.captures[1])
     end
-    manifest_minor = _minor(manifest_version)
     channel_minor = _minor(channel_version)
-    (isnothing(manifest_minor) || isnothing(channel_minor)) && return nothing
+    isnothing(channel_minor) && return nothing
+    manifest_version = manifest_version_of(search_dir, walk, channel_minor)::Union{Nothing, String}
+    isnothing(manifest_version) && return nothing
+    manifest_minor = _minor(manifest_version)
+    isnothing(manifest_minor) && return nothing
     manifest_minor == channel_minor && return nothing
 
     error(
