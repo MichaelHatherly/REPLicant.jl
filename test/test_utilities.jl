@@ -73,6 +73,7 @@
     function withserver(
             func;
             max_connections::Int = 100,
+            max_pending_rejections::Int = 4max_connections,
             read_timeout_seconds::Float64 = 30.0,
             logger = Test.TestLogger(),
         )
@@ -88,7 +89,9 @@
                 cd(tmp) do
                     Logging.with_logger(logger) do
                         server =
-                            REPLicant.Server(mod; max_connections, read_timeout_seconds)
+                            REPLicant.Server(
+                            mod; max_connections, max_pending_rejections, read_timeout_seconds,
+                        )
                         port = take!(server.channel)
                         @info "REPLicant server started" port max_connections
                         entry = joinpath(registry, string(port))
