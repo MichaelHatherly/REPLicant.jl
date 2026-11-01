@@ -118,26 +118,28 @@ end
     mktempdir() do registry
         mktempdir() do work
             entry_path = Utilities.spawn_server(registry, work) do port, pid
-                # Wedge the worker on a non-returning eval: fire the frame and do
-                # not wait for a response that will never come.
-                wedge = Sockets.connect(Sockets.localhost, port)
-                REPLicant._write_frame(wedge, REPLicant.REQUEST_EVAL, "while true; end")
-                sleep(0.5)
-
-                out = IOBuffer()
                 withenv("REPLICANT_DIR" => registry) do
-                    # Kill resolves and terminates without needing a pong.
-                    @test REPLicant._kill_server(["--port=$port", "--force"]; out) == 0
-                end
-                @test contains(String(take!(out)), string(pid))
+                    # Wedge the worker on a non-returning eval: fire the frame and do
+                    # not wait for a response that will never come.
+                    wedge = Utilities.sendframe(
+                        Sockets.connect(Sockets.localhost, port), "while true; end",
+                    )
+                    sleep(0.5)
+                    @test !isempty(REPLicant._ping_status(port))
 
-                # The process dies and its registry entry is removed.
-                deadline = time() + 10
-                while REPLicant._process_alive(pid) && time() < deadline
-                    sleep(0.1)
+                    # Kill resolves and terminates without needing a pong.
+                    out = IOBuffer()
+                    @test REPLicant._kill_server(["--port=$port", "--force"]; out) == 0
+                    @test contains(String(take!(out)), string(pid))
+
+                    # The process dies and its registry entry is removed.
+                    deadline = time() + 10
+                    while REPLicant._process_alive(pid) && time() < deadline
+                        sleep(0.1)
+                    end
+                    @test !REPLicant._process_alive(pid)
+                    close(wedge)
                 end
-                @test !REPLicant._process_alive(pid)
-                close(wedge)
             end
             @test !isfile(entry_path)
         end
