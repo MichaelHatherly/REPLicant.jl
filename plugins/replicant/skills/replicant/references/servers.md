@@ -4,29 +4,10 @@ Part of the `replicant` skill; see `SKILL.md`.
 
 ## Find and select servers
 
-```bash
-julia +rpc ls
-```
-
-Lists every live server: `PORT NAME PROJECT JULIA PID STARTED STATUS`. `STATUS` is
-`idle`, or `busy <n>s` when the server is mid-evaluation (a long compute, or a
-wedge). A server is rooted at the project it started in (git top-level, else the
-working directory). `julia +rpc` from inside that tree selects it. With one server
-for the project, selection is automatic. Disambiguate with:
-
-- `--name <label>`: pick a labeled server (see below).
-- `--port <n>`: target a specific port.
-- `--project <path>`: select by project root (defaults to the current directory).
-
-Label the current process's server, then route to it by name:
-
-```bash
-julia +rpc -e 'REPLicant.label!("main")'
-julia +rpc --name=main -e '21 * 2'
-```
-
-Several servers can run in one project; each label is unique among live servers
-there. An agent reaching a server by `--port` can label it the same way.
+[Select a server when several are running](../../../docs/how-to/select-a-server.md)
+covers `julia +rpc ls`, the selectors, and labels. A `busy` status that keeps
+climbing is a long compute or a wedge. Label a server you reach by `--port` so
+later calls can route by `--name`.
 
 ## Start a server
 
@@ -75,34 +56,19 @@ julia +rpc reset --module build
 The default session is the process's `Main` and cannot be reset, so `--module` is
 required. See `evaluate.md` for named sessions.
 
-## Inspect a server
-
-When a server was started with `save = true` (as the recommended startup.jl
-does), the session holds a handle:
-
-```julia
-REPLicant.server()        # the running Server, or nothing
-close(REPLicant.server()) # stop it
-```
-
-Showing the handle reports port, project, name, start time, and limits, read from
-the struct, not the registry.
-
 ## Restart a server
 
-`julia +rpc restart` swaps the server's process for a fresh Julia on the same
-command line, then waits until the server registers again:
+[Start, restart, and stop a server](../../../docs/how-to/manage-a-server.md#restart-a-server)
+describes what a restart keeps and drops. It takes the same selectors as eval:
 
 ```bash
-julia +rpc restart              # the server for this directory
-julia +rpc restart --name=main  # same selectors as eval
+julia +rpc restart --name=main
 ```
 
-The pid, terminal, environment, and launch directory carry over. An interactive
-REPL comes back as a new REPL in the same pane, so the human beside you keeps their
-terminal. `startup.jl` runs again and the server comes up on a new port; route by
-`--name` or directory rather than a remembered `--port`. Everything the session
-loaded is gone, so re-run your setup.
+An interactive REPL comes back as a new REPL in the same pane, so the human beside
+you keeps their terminal. The server comes up on a new port; route by `--name` or
+directory, not a remembered `--port`. Everything the session loaded is gone, so
+re-run your setup.
 
 Reach for it when Revise cannot track a change (a redefined `struct`, a changed
 `const`), when the process state is suspect, or when an eval has wedged the
@@ -124,17 +90,3 @@ julia +rpc kill --force    # SIGKILL, the only signal that lands on a tight loop
 `kill` takes the same `--port`/`--name`/`--project` selectors as eval and resolves
 from the registry without pinging, so a server that cannot answer still resolves.
 Killing loses the session state; start a fresh server afterward.
-
-## Start a server by hand
-
-When not relying on startup.jl:
-
-```julia
-using REPLicant
-REPLicant.Server()                 # quiet
-REPLicant.Server(verbose = true)   # log lifecycle and per-connection events
-```
-
-`Server` keywords: `max_connections` (default 100), `read_timeout_seconds`
-(default 30.0), `save` (default false, store the handle for `server()`),
-`verbose` (default false, errors always log).

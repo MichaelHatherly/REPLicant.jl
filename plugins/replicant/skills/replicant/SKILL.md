@@ -23,13 +23,15 @@ EOF
 ## Where to look
 
 - **`references/evaluate.md`**: running code (heredoc vs `-e`, escaping inside
-  wrappers, output format) and session state across calls.
-- **`references/servers.md`**: listing servers with `julia +rpc ls`, selecting
-  by `--name`/`--port`/`--project`, labeling with `label!`, inspecting a saved
-  handle, restarting or stopping a server, and starting one by hand.
+  wrappers), working directory, timeouts, help mode, and named sessions.
+- **`references/servers.md`**: selecting and labeling servers, starting one with
+  `julia +rpc start`, resetting a named session, restarting, and stopping a wedged
+  server.
 - **`references/setup.md`**: when `julia +rpc` is not installed, is not a known
   channel, or cannot reach a server. Install, link the `rpc` channel, wire
   startup.jl, self-test, troubleshoot.
+- **`../../docs/README.md`**: the user documentation, including limits, the
+  security model, and how to free a wedged server.
 
 ## Strategies
 
@@ -39,8 +41,8 @@ Getting the most from a warm session:
   `using` or `include`, then keep each eval small. The session holds what you
   loaded, so the compilation paid on the first call is free on every call after.
   Re-`using` a package in an eval only when you changed what you import.
-- **Let Revise track your edits.** The recommended startup.jl loads Revise
-  (`setup.md`), so editing a package's source updates the running session in
+- **Let Revise track your edits.** When the server's session has Revise loaded,
+  usually from startup.jl, editing a package's source updates the running session in
   place: change the code, re-run the call, read the new result. Restart only for a
   change Revise cannot track, such as redefining a `struct`, or a wedged worker:
   `julia +rpc restart` replaces the process in place (`servers.md`).

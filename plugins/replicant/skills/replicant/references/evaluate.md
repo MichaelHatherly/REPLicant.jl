@@ -27,8 +27,8 @@ A wrapper that passes the code through a second shell layer (a Make target, a ta
 runner) needs the inner double quotes escaped as `\"`. Reaching for a heredoc
 avoids the question.
 
-Output is REPL-style: captured stdout and stderr first, then the value, or a
-scrubbed error with backtrace.
+[Evaluate code on a server](../../../docs/how-to/evaluate-code.md) describes the output
+format.
 
 ## Working directory
 
@@ -85,15 +85,10 @@ back to `@doc`, covering bindings, operators, and macros.
 
 ## Session state
 
-The server evaluates into a persistent `Main`, so bindings survive across calls:
-
-```bash
-julia +rpc -e 'x = [i^2 for i in 1:5]'   # define
-julia +rpc -e 'sum(x)'                    # x is still in scope -> 55
-```
-
-This is the point of a warm session, but `Main` is shared mutable state. Do not
-assume a clean slate. Restart the server for a fresh session.
+Bindings survive across calls; see
+[Evaluate code on a server](../../../docs/how-to/evaluate-code.md#build-on-earlier-calls).
+This is the point of a warm session, but the session is shared mutable state. Do
+not assume a clean slate. Restart the server for a fresh session.
 
 ## Named sessions
 

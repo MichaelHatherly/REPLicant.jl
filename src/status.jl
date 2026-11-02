@@ -115,8 +115,8 @@ draw on.
 
 The row reports the server running in this session (its label, port, project, and
 uptime) and whether it is evaluating something right now. While it is, the row
-counts up the elapsed time and shows the first line of the code being run. The full
-history of what ran is what `julia +rpc log` renders.
+counts up the elapsed time and shows the first line of the code being run.
+`julia +rpc log` shows recent activity.
 
     REPLicant.footer!()       # pin the status row
     REPLicant.footer!(false)  # hand the row back

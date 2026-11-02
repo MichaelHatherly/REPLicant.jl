@@ -16,20 +16,9 @@ resolves `using REPLicant` from there.
    julia -e 'using Pkg; Pkg.add("REPLicant")'
    ```
 
-2. Auto-start a server in interactive REPLs. In `~/.julia/config/startup.jl`:
-
-   ```julia
-   if isinteractive()
-       try
-           import REPLicant
-           REPLicant.Server(save = true)
-       catch error
-           @error "Failed to start REPLicant server" error
-       end
-   end
-   ```
-
-   Open an interactive `julia` inside a project and it serves that project.
+2. Auto-start a server in interactive REPLs: add the snippet in
+   [Start a server from startup.jl](../../../docs/how-to/manage-a-server.md#start-a-server-from-startupjl)
+   to `~/.julia/config/startup.jl`.
 
    An agent with no interactive REPL starts one directly instead:
 
@@ -76,5 +65,5 @@ project. A channel error means the link is missing: rerun step 3.
 
 - **`using REPLicant` fails inside the client.** REPLicant is not in the default
   env for the linked Julia version. Install it there under that version.
-- **`ERROR: Server at capacity, please retry`.** All `max_connections` slots are
+- **`Server at capacity, please retry`.** All `max_connections` slots are
   busy. Retry, or start the server with a higher `max_connections`.
