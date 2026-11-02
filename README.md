@@ -190,7 +190,8 @@ The server re-execs its own Julia process on the argv it launched with. The pid,
 terminal, environment, and launch directory stay the same. Everything loaded in the
 session is dropped, and `startup.jl` runs again, so the server registers on a new
 port. An interactive REPL comes back as a fresh REPL in the same terminal. A
-restart frees a server wedged on an eval, even one that never yields. It runs the
+restart frees a server wedged on an eval, even one that never yields, provided the
+server can still answer (see Limits for Julia 1.10 and 1.11). It runs the
 process's `atexit` hooks first, as `exit()` does. Restart needs `execv`, so it works
 on macOS and Linux only.
 
@@ -250,6 +251,11 @@ REPLicant executes arbitrary code with full system access.
   ignores it, and SIGINT too. `julia +rpc restart` replaces the process and keeps
   its terminal. `julia +rpc kill --force` stops it outright. Either way the session
   state is lost.
+- Julia 1.10 and 1.11 start without an interactive thread, so an eval can take the
+  thread that answers requests. Code that never yields then blocks pings and
+  `restart` too: the server drops out of `ls`, and only `kill --force` stops it.
+  Start the server's Julia with an interactive thread (`julia --threads=auto,1`)
+  to keep it reachable. Julia 1.12 and later start one by default.
 - `exit()` in an eval stops the shared server. The client reports that the server
   exited.
 - A client killed with SIGTERM prints a signal report and stack trace. Julia's own
