@@ -17,14 +17,13 @@
   and later start one by default.
 - `exit()` in an eval stops the shared server. The client reports that the server
   exited.
-- `restart` needs `execv`, so it works on macOS and Linux only.
+- `restart` works on macOS and Linux only.
 - A client killed with SIGTERM prints Julia's signal report, such as
   `signal 15: Terminated: 15`, and the expression it was running. Julia's own
   signal handler prints it, as for any Julia process.
 
 ## Connections
 
-- Each connection is handled in a separate task.
 - Evals from different clients run one after another in the same session, so an
   eval sees whatever state earlier evals left behind.
 - `ping`, `interrupt`, `reset`, `log`, and `restart` are answered while an eval

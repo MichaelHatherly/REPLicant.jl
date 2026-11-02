@@ -67,8 +67,7 @@ The new process serves again only if its startup starts a server: through
 port. A server started by hand at the prompt does not come back, and the client
 reports that it did not register again.
 
-Restart needs `execv` and reads the argv from the OS, so it works on macOS and
-Linux only.
+Restart works on macOS and Linux only.
 
 ## Stop a server
 

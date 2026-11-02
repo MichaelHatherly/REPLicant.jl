@@ -1,8 +1,7 @@
 # How REPLicant works
 
 1. The server lets the OS assign a free port on loopback and listens for
-   requests. Each request is a frame: a fixed header carrying a magic, version,
-   type, and body length, followed by the body.
+   requests.
 2. It registers itself in an owner-only directory (`$REPLICANT_DIR`, else
    `tempdir()/replicant-<uid>`, or `tempdir()/replicant` on Windows), one
    `key=value` file per live server. The client reads that directory to find and
