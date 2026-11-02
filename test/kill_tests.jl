@@ -125,7 +125,9 @@ end
                         Sockets.connect(Sockets.localhost, port), "while true; end",
                     )
                     sleep(0.5)
-                    @test !isempty(REPLicant._ping_status(port))
+                    # Busy, or silent where the wedged worker shares the accept loop's
+                    # only thread (Julia before 1.12 has no interactive thread).
+                    @test REPLicant._ping_status(port) != ""
 
                     # Kill resolves and terminates without needing a pong.
                     out = IOBuffer()
