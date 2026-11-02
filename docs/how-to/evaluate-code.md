@@ -18,12 +18,15 @@ julia +rpc -e '6 * 7'
 julia +rpc -e 'println("hi"); 1 + 1'
 ```
 
-Output is REPL-style: captured stdout and stderr first, then the value, or a
-scrubbed error with backtrace.
+Output is REPL-style. Captured stdout, stderr, and log messages come first, in
+the order they were written, then the value. A `nothing` result or a trailing `;`
+prints no value. An error prints its message and a backtrace cut at top-level
+scope to stderr, and the client exits with status 1.
 
 ## Build on earlier calls
 
-The server evaluates into a persistent `Main`, so bindings survive across calls:
+The server evaluates into its REPL's active module, usually `Main`, so bindings
+survive across calls:
 
 ```bash
 julia +rpc -e 'x = [i^2 for i in 1:5]'   # define

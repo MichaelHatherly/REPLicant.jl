@@ -1,6 +1,7 @@
 # How to run the tests and format the code
 
-Run the test suite:
+Run the test suite. It runs through `julia +rpc`, so start a server in this
+repo first:
 
 ```bash
 just test-all

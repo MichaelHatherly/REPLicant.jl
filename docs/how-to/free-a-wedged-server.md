@@ -19,7 +19,7 @@ Try these in order.
    julia +rpc restart
    ```
 
-   This needs the server to still answer requests. On Julia 1.10 and 1.11 it may
+   Restart works on macOS and Linux only. It needs the server to still answer requests. On Julia 1.10 and 1.11 it may
    not; see [Limits and concurrency](../reference/limits.md).
 
 3. Kill it outright.

@@ -26,6 +26,6 @@ With the skill available, ask the agent:
 
 > Install REPLicant and confirm `julia +rpc` works.
 
-The skill installs into the global environment, links the `rpc` channel, wires
-the startup.jl auto-start, and runs a self-test (`julia +rpc ls` and `julia +rpc
+The skill has the agent install REPLicant into the global environment, add the
+startup.jl auto-start, link the `rpc` channel, and run a self-test (`julia +rpc ls` and `julia +rpc
 -e '1 + 1'`).
