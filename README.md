@@ -55,6 +55,6 @@ so every interactive session serves its project.
 
 ## Documentation
 
-[docs/](docs/README.md) holds how-to guides, reference, and explanation. Read
-the [security model](docs/explanation/security.md) before running REPLicant:
-it executes arbitrary code with full system access.
+See [docs/](docs/README.md). REPLicant runs any code sent to it with your
+user's permissions; the [security model](docs/explanation/security.md) covers
+who can send it code.

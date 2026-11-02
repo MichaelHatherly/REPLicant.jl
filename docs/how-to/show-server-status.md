@@ -13,7 +13,7 @@ runs, how long it has run and the first line of its code:
 REPLicant  main  :8004  MyProject  up 12m  busy 3s  describe(df)
 ```
 
-A busy time that keeps climbing tells a wedged eval from a long one; see
+If the busy time climbs well past what the code should take, see
 [Free a wedged server](free-a-wedged-server.md). Run `julia +rpc log` for the full
 history of what ran.
 

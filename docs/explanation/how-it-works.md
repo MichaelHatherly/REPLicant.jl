@@ -1,9 +1,5 @@
 # How REPLicant works
 
-Julia pays startup and compilation latency on every fresh process, which makes a
-process per snippet too slow for tools that run many small evaluations.
-REPLicant pays that cost once and reuses the process.
-
 1. The server lets the OS assign a free port and listens for
    length-prefixed requests.
 2. It registers itself in an owner-only directory (`$REPLICANT_DIR`, else

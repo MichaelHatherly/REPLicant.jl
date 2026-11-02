@@ -1,8 +1,7 @@
 # How to set up REPLicant for a coding agent
 
-REPLicant ships a skill through the Claude Code and Codex plugin systems. The
-skill teaches an agent to install REPLicant and drive `julia +rpc`, so setup is a
-single request.
+REPLicant includes a skill for the Claude Code and Codex plugin systems. It
+tells an agent how to install REPLicant and use `julia +rpc`.
 
 ## Add the skill
 

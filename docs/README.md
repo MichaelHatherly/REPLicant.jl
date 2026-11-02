@@ -1,11 +1,9 @@
 # REPLicant documentation
 
 REPLicant keeps one Julia process warm as a socket server, and `julia +rpc`
-forwards code to it. These pages are grouped by what you need from them.
+forwards code to it.
 
 ## How-to guides
-
-Steps for a task, assuming REPLicant is installed.
 
 - [Set up REPLicant for a coding agent](how-to/set-up-coding-agents.md)
 - [Start, restart, and stop a server](how-to/manage-a-server.md)
