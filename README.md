@@ -17,23 +17,9 @@ State survives between calls.
 
 ## Installation
 
-Install REPLicant into the default (global) environment, like Revise. The `julia
-+rpc` client runs with no `--project` and resolves `using REPLicant` from there:
-
-```julia
-using Pkg
-Pkg.add("REPLicant")
-```
-
-Then link the `julia +rpc` channel once:
-
-```julia
-using REPLicant
-REPLicant.install_channel()
-```
-
-To have a coding agent such as Claude Code or Codex set this up for you, see
-[Set up REPLicant for a coding agent](plugins/replicant/docs/how-to/set-up-coding-agents.md).
+See [Install REPLicant](plugins/replicant/docs/how-to/install.md), or
+[set it up through a coding agent](plugins/replicant/docs/how-to/set-up-coding-agents.md)
+such as Claude Code or Codex.
 
 ## Quick use
 

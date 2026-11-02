@@ -69,4 +69,4 @@ Three parts. The code is the reference; this is the map:
 
 Commands live in the `justfile` (`just` with no args lists them): `just test-all`
 and friends run the TestItemRunner suite, `just fmt` / `just fmt-check` run Runic.
-Tests are `@testitem` blocks. Format with Runic before committing.
+The suite runs through `julia +rpc`, so start a server in this repo first. Tests are `@testitem` blocks. Format with Runic before committing.
