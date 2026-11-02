@@ -11,7 +11,8 @@ Try these in order.
    ```
 
    `interrupt` is cooperative. Code that never yields, such as `while true; end`,
-   ignores it, and SIGINT too.
+   ignores it. Don't send the server SIGINT instead: the code keeps running, and
+   the server can stop answering requests.
 
 2. Restart the server. It keeps its pid and terminal and loses its session state.
 
