@@ -23,13 +23,15 @@ EOF
 ## Where to look
 
 - **`references/evaluate.md`**: running code (heredoc vs `-e`, escaping inside
-  wrappers, output format) and session state across calls.
-- **`references/servers.md`**: listing servers with `julia +rpc ls`, selecting
-  by `--name`/`--port`/`--project`, labeling with `label!`, inspecting a saved
-  handle, restarting or stopping a server, and starting one by hand.
+  wrappers), working directory, timeouts, help mode, and named sessions.
+- **`references/servers.md`**: selecting and labeling servers, starting one with
+  `julia +rpc start`, resetting a named session, restarting, and stopping a wedged
+  server.
 - **`references/setup.md`**: when `julia +rpc` is not installed, is not a known
   channel, or cannot reach a server. Install, link the `rpc` channel, wire
   startup.jl, self-test, troubleshoot.
+- **`../../docs/README.md`**: the user documentation, including limits, the
+  security model, and how to free a wedged server.
 
 ## Strategies
 

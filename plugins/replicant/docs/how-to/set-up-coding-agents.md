@@ -7,7 +7,7 @@ tells an agent how to install REPLicant and use `julia +rpc`.
 
 Claude Code, at its prompt:
 
-```
+```text
 /plugin marketplace add MichaelHatherly/REPLicant.jl
 /plugin install replicant@replicant
 ```

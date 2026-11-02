@@ -33,7 +33,7 @@ REPLicant.install_channel()
 ```
 
 To have a coding agent such as Claude Code or Codex set this up for you, see
-[Set up REPLicant for a coding agent](docs/how-to/set-up-coding-agents.md).
+[Set up REPLicant for a coding agent](plugins/replicant/docs/how-to/set-up-coding-agents.md).
 
 ## Quick use
 
@@ -50,11 +50,11 @@ Then, from a shell in the same project:
 julia +rpc -e '6 * 7'
 ```
 
-[Start a server from startup.jl](docs/how-to/manage-a-server.md#start-a-server-from-startupjl)
+[Start a server from startup.jl](plugins/replicant/docs/how-to/manage-a-server.md#start-a-server-from-startupjl)
 so every interactive session serves its project.
 
 ## Documentation
 
-See [docs/](docs/README.md). REPLicant runs any code sent to it with your
-user's permissions; the [security model](docs/explanation/security.md) covers
+See [the docs](plugins/replicant/docs/README.md). REPLicant runs any code sent to it with your
+user's permissions; the [security model](plugins/replicant/docs/explanation/security.md) covers
 who can send it code.
