@@ -32,246 +32,29 @@ using REPLicant
 REPLicant.install_channel()
 ```
 
-## Use with coding agents (Claude Code / Codex)
+To have a coding agent such as Claude Code or Codex set this up for you, see
+[Set up REPLicant for a coding agent](docs/how-to/set-up-coding-agents.md).
 
-REPLicant ships a skill through the Claude Code and Codex plugin systems. The
-skill teaches an agent to install REPLicant and drive `julia +rpc`, so setup is a
-single request rather than a checklist.
+## Quick use
 
-### Add the skill
-
-Claude Code:
-
-```
-/plugin marketplace add MichaelHatherly/REPLicant
-/plugin install replicant@replicant
-```
-
-Codex:
-
-```
-/plugin marketplace add MichaelHatherly/REPLicant
-/plugin install replicant@replicant
-/reload-plugins
-```
-
-### Install and verify
-
-With the skill available, ask the agent:
-
-> Install REPLicant and confirm `julia +rpc` works.
-
-The skill installs into the global environment, links the `rpc` channel, wires
-the startup.jl auto-start, and runs a self-test (`julia +rpc ls` and `julia +rpc
--e '1 + 1'`).
-
-## Usage
-
-### Start a server
-
-A server stays alive as long as its Julia process. The usual setup is startup.jl:
-open an interactive `julia` inside a project and it serves that project. To start
-one by hand:
+Start a server from an interactive `julia` in your project:
 
 ```julia
 using REPLicant
-
-REPLicant.Server()                 # quiet
-REPLicant.Server(verbose = true)   # log lifecycle and per-connection events
+REPLicant.Server()
 ```
 
-`Server` keywords: `max_connections` (default 100), `read_timeout_seconds`
-(default 30.0), `save` (default false, store the handle for `REPLicant.server()`),
-`verbose` (default false, errors always log).
-
-### Evaluate code
-
-Use a heredoc with a quoted delimiter for anything beyond a trivial expression:
-
-```bash
-julia +rpc <<'EOF'
-v = filter(isodd, 1:10)
-sum(v)
-EOF
-```
-
-One-liners can use `-e`:
+Then, from a shell in the same project:
 
 ```bash
 julia +rpc -e '6 * 7'
-julia +rpc -e 'println("hi"); 1 + 1'
 ```
 
-Output is REPL-style: captured stdout and stderr first, then the value, or a
-scrubbed error with backtrace.
+[Start a server from startup.jl](docs/how-to/manage-a-server.md#start-a-server-from-startupjl)
+so every interactive session serves its project.
 
-### Session state
+## Documentation
 
-The server evaluates into a persistent `Main`, so bindings survive across calls:
-
-```bash
-julia +rpc -e 'x = [i^2 for i in 1:5]'   # define
-julia +rpc -e 'sum(x)'                    # x is still in scope -> 55
-```
-
-`Main` is shared mutable state. Restart the server for a clean slate.
-
-### Find and select servers
-
-```bash
-julia +rpc ls
-```
-
-Lists every live server: `PORT NAME PROJECT JULIA PID STARTED`. A server is
-rooted at the project it started in (git top-level, else the working directory).
-`julia +rpc` from inside that tree selects it, automatically when the project has
-one server. Disambiguate with:
-
-- `--name <label>`: pick a labeled server
-- `--port <n>`: target a specific port
-- `--project <path>`: select by project root (defaults to the current directory)
-
-Label the current process's server, then route to it by name:
-
-```bash
-julia +rpc -e 'REPLicant.label!("main")'
-julia +rpc --name=main -e '21 * 2'
-```
-
-Each label is unique among live servers for a project.
-
-### Inspect a server
-
-A server started with `save = true` (as the recommended startup.jl does) holds a
-handle in its session. Servers started later without it, as a test suite starts
-them, leave it as the server `label!` and the footer act on:
-
-```julia
-REPLicant.server()        # the running Server, or nothing
-close(REPLicant.server()) # stop it
-```
-
-Showing the handle reports port, project, name, start time, and limits.
-
-### Pin status to the bottom of the terminal
-
-```julia
-REPLicant.footer!()
-```
-
-The bottom row of the terminal shows the server's status, and while an evaluation
-runs, the first line of its code:
-
-```text
-REPLicant  main  :8004  MyProject  up 12m  busy 3s  describe(df)
-```
-
-The row is taken out of the terminal's scrolling region rather than printed, so
-the prompt keeps working and ordinary output scrolls underneath it.
-
-The row identifies the server by label, port, and project. It also says whether
-the server is evaluating something right now, counting up while it is. The elapsed time
-tells a long computation from a wedged one, and the code says which computation it
-is. When the terminal is too narrow, the code is cut first. `julia +rpc log` shows
-the full history of what ran. `footer!(false)` hands the row back.
-
-Ctrl-L clears the screen above the footer and leaves the footer alone. Call
-`footer!()` from startup.jl alongside the server, or at the prompt at any time.
-With output piped or redirected there is no terminal to draw on, and it returns
-`false` without drawing.
-
-### Restart a server
-
-```bash
-julia +rpc restart
-```
-
-The server re-execs its own Julia process on the argv it launched with. The pid,
-terminal, environment, and launch directory stay the same. Everything loaded in the
-session is dropped, and `startup.jl` runs again, so the server registers on a new
-port. An interactive REPL comes back as a fresh REPL in the same terminal. A
-restart frees a server wedged on an eval, even one that never yields, provided the
-server can still answer (see Limits for Julia 1.10 and 1.11). It runs the
-process's `atexit` hooks first, as `exit()` does. Restart needs `execv`, so it works
-on macOS and Linux only.
-
-### Stop a server
-
-```julia
-close(server)
-```
-
-This removes the server's registry entry. Exiting the Julia process stops the
-server and cleans up the same way.
-
-## How it works
-
-1. The server lets the OS assign a free port and listens for
-   length-prefixed requests.
-2. It registers itself in an owner-only directory (`$REPLICANT_DIR`, else
-   `tempdir()/replicant-<uid>`, or `tempdir()/replicant` on Windows), one
-   `key=value` file per live server. The client reads that directory to find and
-   select a target.
-3. Code runs in a persistent module with `include_string`, so state survives
-   between calls.
-4. With Revise loaded, changed code reloads before each request.
-
-## Risks and considerations
-
-### Security
-
-REPLicant executes arbitrary code with full system access.
-
-- Only run it in trusted environments
-- The server listens on loopback only. Each server generates a random token at
-  startup and writes it into its registry entry. A request without that token is
-  rejected, so another local user cannot run code through your port.
-- Before sending anything, the client checks that the server holds that token: the
-  server answers a random challenge with an HMAC keyed by it. A process listening
-  on a dead server's port cannot pass as the server or see what you send it.
-- On Unix the registry directory is forced to mode `0700`. REPLicant refuses a
-  registry directory owned by another user.
-- Anything running as your user can read the token, the same way it could read
-  your files
-- Executed code has the same permissions as the Julia process
-
-### Concurrency
-
-- Each connection is handled in a separate task
-- Concurrent requests share global state and can interfere
-- `max_connections` (default 100) bounds concurrent connections
-- At capacity, new connections receive `ERROR: Server at capacity, please retry`.
-  Pings are still answered, so `ls` and server selection keep a full server
-
-### Limits
-
-- Evals run one at a time. When `--timeout` expires, the eval keeps running on
-  the server and later evals wait behind it. Free it with `julia +rpc interrupt`.
-- `interrupt` is cooperative. Code that never yields, such as `while true; end`,
-  ignores it, and SIGINT too. `julia +rpc restart` replaces the process and keeps
-  its terminal. `julia +rpc kill --force` stops it outright. Either way the session
-  state is lost.
-- Julia 1.10 and 1.11 start without an interactive thread, so an eval can take the
-  thread that answers requests. Code that never yields then blocks pings and
-  `restart` too: the server drops out of `ls`, and only `kill --force` stops it.
-  Start the server's Julia with an interactive thread (`julia --threads=auto,1`)
-  to keep it reachable. Julia 1.12 and later start one by default.
-- `exit()` in an eval stops the shared server. The client reports that the server
-  exited.
-- A client killed with SIGTERM prints a signal report and stack trace. Julia's own
-  signal handler prints it, as for any Julia process.
-
-## Development
-
-### Running tests
-
-```bash
-just test-all
-```
-
-### Formatting
-
-```bash
-just fmt         # format in-place with Runic
-just fmt-check   # check formatting (CI)
-```
+[docs/](docs/README.md) holds how-to guides, reference, and explanation. Read
+the [security model](docs/explanation/security.md) before running REPLicant:
+it executes arbitrary code with full system access.
