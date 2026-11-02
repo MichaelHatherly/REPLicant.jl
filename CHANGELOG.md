@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Point the plugin install instructions at `MichaelHatherly/REPLicant.jl`. The documented `/plugin marketplace add MichaelHatherly/REPLicant` failed with "repository not found" in both Claude Code and Codex, and the Codex steps used Claude Code slash commands instead of `codex plugin marketplace add` and `codex plugin add`. The plugin manifest's `homepage` had the same wrong URL [#93]
 - Report a full server as full. A client sent to a server at its connection limit said "no REPLicant server responding", since the server rejected the client's liveness ping along with everything else, and selection could skip that server for another one. A full server now still answers pings, so the client reaches it and reports "Server at capacity, please retry" [#90]
 - Reject a `julia +rpc log --since` value that is not a sequence number, as `--port` and `--timeout` do. An empty value fell back to the default count and `abc` read as 0, which returned the whole log [#90]
 - Stop the first `@run_package_tests` in a session from echoing its `DefaultTestSet`. That eval loads Test, and Test brings the rule that hides a test set's value, too late for the eval to see it. Later evals stayed quiet [#90]

@@ -39,8 +39,8 @@ Getting the most from a warm session:
   `using` or `include`, then keep each eval small. The session holds what you
   loaded, so the compilation paid on the first call is free on every call after.
   Re-`using` a package in an eval only when you changed what you import.
-- **Let Revise track your edits.** The recommended startup.jl loads Revise
-  (`setup.md`), so editing a package's source updates the running session in
+- **Let Revise track your edits.** When the server's session has Revise loaded,
+  usually from startup.jl, editing a package's source updates the running session in
   place: change the code, re-run the call, read the new result. Restart only for a
   change Revise cannot track, such as redefining a `struct`, or a wedged worker:
   `julia +rpc restart` replaces the process in place (`servers.md`).
