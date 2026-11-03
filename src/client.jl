@@ -489,9 +489,18 @@ function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     action = if !parsed.force && _request_shutdown(entry.port) && _await_exit(pid)
         "shut down"
     else
-        signal = parsed.force ? "SIGKILL" : "SIGTERM"
-        delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
-        if !delivered || !_await_exit(pid)
+        force = parsed.force
+        delivered = _signal_process(pid, force ? SIGKILL : SIGTERM)
+        exited = delivered && _await_exit(pid)
+        # A server that unregistered has run its exit hooks, so it can never serve
+        # again, and `--force` could no longer find it. Its exit stalls behind an
+        # eval with no safepoint; only SIGKILL ends it.
+        if delivered && !exited && !force && !isfile(path)
+            force = true
+            exited = _signal_process(pid, SIGKILL) && _await_exit(pid)
+        end
+        if !exited
+            signal = force ? "SIGKILL" : "SIGTERM"
             println(
                 err,
                 "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
@@ -499,7 +508,7 @@ function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
             )
             return 1
         end
-        parsed.force ? "killed" : "terminated"
+        force ? "killed" : "terminated"
     end
     rm(path; force = true)
     println(out, "$action REPLicant server on port $(entry.port) (pid $pid)")

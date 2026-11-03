@@ -201,3 +201,32 @@ end
         end
     end
 end
+
+@testitem "kill_escalates_when_unregistered_server_survives" tags = [:kill] begin
+    import REPLicant
+    import Sockets
+
+    if Sys.iswindows()
+        @test true skip = true
+    else
+        # A server whose exit hooks ran on SIGTERM but whose exit then stalls behind
+        # an eval that never reaches a safepoint: it unregisters and stays alive.
+        mktempdir() do registry
+            withenv("REPLICANT_DIR" => registry) do
+                port, listener = Sockets.listenany(0)
+                path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                script = "trap 'rm -f \"$path\"' TERM; while :; do sleep 0.1; done"
+                proc = run(`sh -c $script`; wait = false)
+                try
+                    write(path, replace(read(path, String), r"pid=\d+" => "pid=$(getpid(proc))"))
+                    out, err = IOBuffer(), IOBuffer()
+                    @test REPLicant._kill_server(["--port=$port"]; out, err) == 0
+                    @test contains(String(take!(out)), "killed")
+                finally
+                    close(listener)
+                    kill(proc, Base.SIGKILL)
+                end
+            end
+        end
+    end
+end

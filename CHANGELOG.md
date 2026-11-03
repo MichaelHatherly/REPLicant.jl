@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Stop a server that SIGTERM shut down but could not end. Julia runs a server's exit hooks on SIGTERM, which close its listener and remove its registry entry, then stalls the exit behind an eval that never reaches a safepoint. The process stayed alive at full CPU with no entry, so the `julia +rpc kill --force` that `kill` suggested found nothing to stop. `kill` now sends SIGKILL itself once the server has unregistered and still not exited [#96]
 - Give fd 1/2 back after an eval when another package's output router was installed before REPLicant's. The eval restored them by handing the real `stdout` and `stderr` to `_redirect_io_libc`, which takes only streams with an fd of their own, so a router without one threw `MethodError: no method matching _fd(...)`. The throw left fd 1/2 on the eval's capture file, where every later subprocess and C-library write went. Routing now copies fd 1/2 when it installs and restores from the copies, which subprocesses and restarts do not inherit
 - Point the plugin install instructions at `MichaelHatherly/REPLicant.jl`. The documented `/plugin marketplace add MichaelHatherly/REPLicant` failed with "repository not found" in both Claude Code and Codex, and the Codex steps used Claude Code slash commands instead of `codex plugin marketplace add` and `codex plugin add`. The plugin manifest's `homepage` had the same wrong URL [#93]
 - Report a full server as full. A client sent to a server at its connection limit said "no REPLicant server responding", since the server rejected the client's liveness ping along with everything else, and selection could skip that server for another one. A full server now still answers pings, so the client reaches it and reports "Server at capacity, please retry" [#90]
@@ -209,3 +210,4 @@ Initial Public Release
 [#90]: https://github.com/MichaelHatherly/REPLicant.jl/issues/90
 [#91]: https://github.com/MichaelHatherly/REPLicant.jl/issues/91
 [#93]: https://github.com/MichaelHatherly/REPLicant.jl/issues/93
+[#96]: https://github.com/MichaelHatherly/REPLicant.jl/issues/96
