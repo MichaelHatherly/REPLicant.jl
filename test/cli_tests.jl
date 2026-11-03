@@ -398,6 +398,19 @@ end
     @test_throws Exception REPLicant._parse_args(["bogus"])
 end
 
+@testitem "script_run_shows_the_script_as_its_code_line" tags = [:cli] begin
+    import REPLicant
+
+    # The footer and the activity log show the first line of the code sent, so a
+    # script run leads with the script and its ARGS rather than the restore logic.
+    mktempdir() do dir
+        script = joinpath(dir, "demo.jl")
+        write(script, "1")
+        code = REPLicant._script_code(script, ["a", "b c"])
+        @test REPLicant._one_line(code) == "# include($(repr(script))), ARGS = [\"a\", \"b c\"] …"
+    end
+end
+
 @testitem "client_dir_and_module_parsing" tags = [:cli] begin
     import REPLicant
 

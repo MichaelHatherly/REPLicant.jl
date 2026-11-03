@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Show the script in the footer and the activity log for `julia +rpc script.jl`. Both showed the first line of the code sent, which was the internal statement that saves `ARGS`. The code now opens with a comment naming the included path and its `ARGS` [#96]
 - Say which label failed to match. `--name nope` from a directory no server owns reported that nothing owned the directory, which hid the typo in the name; it now reports that no server is named `nope` and lists the candidates. `julia +rpc ls` sizes its columns to their contents, so a long project path no longer pushes the rest of its row out of line [#96]
 - Name the busy server when it cannot answer. A server misses the client's 2s ping while its REPL runs a computation that never yields. The client then dropped it from selection and reported that no server owned the project, or picked the server of an enclosing project instead. Selection now keeps such a server, and the client says which port did not answer and how to stop it [#96]
 - Stop a server that SIGTERM shut down but could not end. Julia runs a server's exit hooks on SIGTERM, which close its listener and remove its registry entry, then stalls the exit behind an eval that never reaches a safepoint. The process stayed alive at full CPU with no entry, so the `julia +rpc kill --force` that `kill` suggested found nothing to stop. `kill` now sends SIGKILL itself once the server has unregistered and still not exited [#96]

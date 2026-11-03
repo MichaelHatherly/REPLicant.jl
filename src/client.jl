@@ -316,11 +316,14 @@ end
 # cwd, and `include` runs it so stack frames carry the real filename and the
 # script's definitions persist in the session. `ARGS` holds the script's arguments
 # for the run, then is restored from task-local storage so the session's `ARGS` is
-# unchanged afterward and nothing leaks into it.
+# unchanged afterward and nothing leaks into it. The leading comment names the
+# script, since the footer and the activity log show the code's first line.
 function _script_code(file::String, script_args::Vector{String})
     path = abspath(file)
     isfile(path) || error("file not found: $file")
+    shown = isempty(script_args) ? "" : ", ARGS = $(repr(script_args))"
     return """
+    # include($(repr(path)))$shown
     task_local_storage(:replicant_saved_args, copy(ARGS))
     empty!(ARGS); append!(ARGS, $(repr(script_args)))
     try
