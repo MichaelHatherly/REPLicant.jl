@@ -83,7 +83,7 @@ A non-returning eval (`while true`, a deadlock, a blocking read) holds the worke
 `restart` (above), which keeps the process's terminal. Otherwise kill the process:
 
 ```bash
-julia +rpc kill            # SIGTERM the resolved server
+julia +rpc kill            # SIGTERM the resolved server, SIGKILL if it then cannot exit
 julia +rpc kill --force    # SIGKILL, the only signal that lands on a tight loop
 ```
 
