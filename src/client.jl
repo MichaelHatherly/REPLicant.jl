@@ -446,8 +446,13 @@ function _list_servers(out::IO = stdout)
         else
             status = "unresponsive"
         end
-        row = [string(entry.port), entry.name, entry.project, entry.julia, entry.pid]
-        push!(table, [row; entry.started; status])
+        push!(
+            table,
+            [
+                string(entry.port), entry.name, entry.project, entry.julia, entry.pid,
+                entry.started, status,
+            ],
+        )
     end
     widths = [maximum(textwidth(row[column]) for row in table) for column in 1:6]
     for row in table
