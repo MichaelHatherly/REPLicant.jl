@@ -284,7 +284,9 @@ end
         cmd = `$(Base.julia_cmd()) --project=$(pkgdir(REPLicant)) --startup-file=no -e $script`
         proc = run(setenv(ignorestatus(cmd), env))
         @test proc.exitcode == 3
-        @test isempty(readdir(tmp))
+        # Only Julia's own temp files: a cold cache precompiles in the child, and
+        # macOS `dsymutil` leaves its working directory in TMPDIR.
+        @test isempty(filter(startswith("jl_"), readdir(tmp)))
     end
 end
 
