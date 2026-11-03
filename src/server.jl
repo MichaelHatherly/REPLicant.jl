@@ -266,6 +266,9 @@ end
 const SERVERS = IdDict{Server, Union{Tuple{Sockets.TCPServer, String}, Nothing}}()
 const SERVERS_LOCK = ReentrantLock()
 const EXIT_HOOKED = Ref(false)
+# The task running the exit hooks. An eval that calls `exit` runs them itself, and
+# the shutdown they trigger must not interrupt it partway through the later hooks.
+const EXITING_TASK = Ref{Union{Task, Nothing}}(nothing)
 
 # Leave the table once the worker has finished, uninstalling routing after the last
 # server. Idempotent per server: shutdown runs from both the serve loop and `atexit`.
@@ -282,6 +285,7 @@ end
 # listener open: closing it ends the server task, and a script blocked on that task
 # would return and exit the process before the re-exec.
 function _exit_cleanup()
+    EXITING_TASK[] = current_task()
     registered = Tuple{Server, Sockets.TCPServer, String}[]
     Base.@lock SERVERS_LOCK for (srv, registration) in SERVERS
         registration === nothing || push!(registered, (srv, registration[1], registration[2]))
@@ -424,7 +428,7 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
                     signal = Base.Event()
                     watcher = @async begin
                         wait(signal)
-                        if !istaskdone(eval_task)
+                        if !istaskdone(eval_task) && eval_task !== EXITING_TASK[]
                             try
                                 schedule(eval_task, InterruptException(); error = true)
                             catch  # dendro-ignore: empty_catch -- eval finished between the check and the schedule

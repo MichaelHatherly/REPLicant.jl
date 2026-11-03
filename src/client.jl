@@ -56,11 +56,14 @@ function _read_entries()
     return entries
 end
 
-# Entries whose servers answer a ping, pruning the registry files of servers that are
-# gone. A busy server that cannot pong is left out but keeps its entry. The pings run
-# concurrently, so selection waits on the slowest server, not the sum of them.
-function _live_entries()
-    live = RegistryEntry[]
+# Entries of servers still running, pruning the registry files of servers that are
+# gone, with the ports that did not answer a ping. A server that cannot pong (its
+# accept loop held by a computation that never yields) keeps its entry and stays a
+# candidate, so selection never passes over it to another project's server. The pings
+# run concurrently, so selection waits on the slowest server, not the sum of them.
+function _running_entries()
+    running = RegistryEntry[]
+    silent = Set{Int}()
     entries = _read_entries()
     answered = fill(false, length(entries))
     @sync for (index, entry) in enumerate(entries)
@@ -68,12 +71,15 @@ function _live_entries()
     end
     for (entry, pong) in zip(entries, answered)
         if pong
-            push!(live, entry)
+            push!(running, entry)
         elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
+        else
+            push!(running, entry)
+            push!(silent, entry.port)
         end
     end
-    return live
+    return (; entries = running, silent)
 end
 
 # Build a selection error listing the candidate servers, showing --name for
@@ -145,6 +151,7 @@ function _select_entry(
         length(named) == 1 && return _warn_foreign(err, named[1], target)
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
+        throw(_candidates_error(candidates, "no server named \"$name\""))
     end
 
     # No server owns the caller's location and no explicit selector was given.
@@ -158,7 +165,7 @@ function _select_entry(
 end
 
 # Resolve an eval target to a port: an explicit port wins and connects directly;
-# otherwise run the cascade over the live servers.
+# otherwise run the cascade over the running servers, refusing one that is silent.
 function _resolve_port(
         port::Integer, project::AbstractString, name::AbstractString; err::IO = stderr,
     )
@@ -166,7 +173,15 @@ function _resolve_port(
         _ping(port) || error("no REPLicant server responding on port $port")
         return port
     end
-    return _select_entry(_live_entries(), project, name; err).port
+    running = _running_entries()
+    entry = _select_entry(running.entries, project, name; err)
+    entry.port in running.silent && error(
+        "the server on port $(entry.port) for $(entry.project) did not answer within \
+        $(PING_TIMEOUT_SECONDS)s; something holds its accept loop, such as a computation \
+        at its REPL that never yields. Retry once it finishes, or stop it with: \
+        julia +rpc kill --port=$(entry.port)",
+    )
+    return entry.port
 end
 
 # Resolve a kill or restart target to its registry entry. Unlike eval, this reads the
@@ -301,11 +316,14 @@ end
 # cwd, and `include` runs it so stack frames carry the real filename and the
 # script's definitions persist in the session. `ARGS` holds the script's arguments
 # for the run, then is restored from task-local storage so the session's `ARGS` is
-# unchanged afterward and nothing leaks into it.
+# unchanged afterward and nothing leaks into it. The leading comment names the
+# script, since the footer and the activity log show the code's first line.
 function _script_code(file::String, script_args::Vector{String})
     path = abspath(file)
     isfile(path) || error("file not found: $file")
+    shown = isempty(script_args) ? "" : ", ARGS = $(repr(script_args))"
     return """
+    # include($(repr(path)))$shown
     task_local_storage(:replicant_saved_args, copy(ARGS))
     empty!(ARGS); append!(ARGS, $(repr(script_args)))
     try
@@ -413,59 +431,37 @@ function _format_status(marker::AbstractString)
 end
 
 function _list_servers(out::IO = stdout)
-    rows = Tuple{RegistryEntry, String}[]
-    entries = _read_entries()
+    entries = sort!(_read_entries(); by = entry -> entry.port)
     statuses = Vector{Union{Nothing, String}}(nothing, length(entries))
     @sync for (index, entry) in enumerate(entries)
         @async statuses[index] = _ping_status(entry.port)
     end
+    table = [["PORT", "NAME", "PROJECT", "JULIA", "PID", "STARTED", "STATUS"]]
     for (entry, status) in zip(entries, statuses)
         if !isnothing(status)
-            push!(rows, (entry, _format_status(status)))
+            status = _format_status(status)
         elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
+            continue
         else
-            push!(rows, (entry, "unresponsive"))
+            status = "unresponsive"
         end
-    end
-    sort!(rows; by = row -> row[1].port)
-    _print_row(out, "PORT", "NAME", "PROJECT", "JULIA", "PID", "STARTED", "STATUS")
-    for (entry, status) in rows
-        _print_row(
-            out,
-            string(entry.port),
-            entry.name,
-            entry.project,
-            entry.julia,
-            entry.pid,
-            entry.started,
-            status,
+        push!(
+            table,
+            [
+                string(entry.port), entry.name, entry.project, entry.julia, entry.pid,
+                entry.started, status,
+            ],
         )
     end
+    widths = [maximum(textwidth(row[column]) for row in table) for column in 1:6]
+    for row in table
+        for (cell, width) in zip(row, widths)
+            print(out, rpad(cell, width), "  ")
+        end
+        println(out, row[end])
+    end
     return nothing
-end
-
-function _print_row(
-        out::IO, port::AbstractString, name::AbstractString, project::AbstractString,
-        julia::AbstractString, pid::AbstractString, started::AbstractString,
-        status::AbstractString,
-    )
-    return println(
-        out,
-        rpad(port, 6),
-        "  ",
-        rpad(name, 12),
-        "  ",
-        rpad(project, 30),
-        "  ",
-        rpad(julia, 8),
-        "  ",
-        rpad(pid, 7),
-        "  ",
-        rpad(started, 23),
-        "  ",
-        status,
-    )
 end
 
 # Terminate a target server's process. Resolves from the raw registry so a wedged
@@ -489,9 +485,18 @@ function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
     action = if !parsed.force && _request_shutdown(entry.port) && _await_exit(pid)
         "shut down"
     else
-        signal = parsed.force ? "SIGKILL" : "SIGTERM"
-        delivered = _signal_process(pid, parsed.force ? SIGKILL : SIGTERM)
-        if !delivered || !_await_exit(pid)
+        force = parsed.force
+        delivered = _signal_process(pid, force ? SIGKILL : SIGTERM)
+        exited = delivered && _await_exit(pid)
+        # A server that unregistered has run its exit hooks, so it can never serve
+        # again, and `--force` could no longer find it. Its exit stalls behind an
+        # eval with no safepoint; only SIGKILL ends it.
+        if delivered && !exited && !force && !isfile(path)
+            force = true
+            exited = _signal_process(pid, SIGKILL) && _await_exit(pid)
+        end
+        if !exited
+            signal = force ? "SIGKILL" : "SIGTERM"
             println(
                 err,
                 "replicant: sent $signal to the server on port $(entry.port) (pid $pid), \
@@ -499,7 +504,7 @@ function _kill_server(args::Vector{String}; out::IO = stdout, err::IO = stderr)
             )
             return 1
         end
-        parsed.force ? "killed" : "terminated"
+        force ? "killed" : "terminated"
     end
     rm(path; force = true)
     println(out, "$action REPLicant server on port $(entry.port) (pid $pid)")

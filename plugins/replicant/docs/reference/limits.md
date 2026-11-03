@@ -11,10 +11,13 @@
   Either way the session state is lost.
 - Julia 1.10 and 1.11 start without an interactive thread, so an eval can take the
   thread that answers requests. Code that never yields then blocks pings and
-  `restart` too: `ls` shows the server as `unresponsive`, server selection skips
-  it, and only `kill --force` stops it. Start the server's Julia with an
+  `restart` too: `ls` shows the server as `unresponsive`, an eval sent to it
+  reports that it did not answer, and only `kill --force` stops it. Start the server's Julia with an
   interactive thread (`julia --threads=auto,1`) to keep it reachable. Julia 1.12
   and later start one by default.
+- A computation at the server's REPL that never yields blocks pings the same
+  way on every Julia version, since the REPL shares the thread that answers
+  them. An eval sent meanwhile reports that the server did not answer.
 - `exit()` in an eval stops the shared server. The client reports that the server
   exited.
 - `restart` works on macOS and Linux only.

@@ -210,6 +210,28 @@ end
     end
 end
 
+@testitem "exit_in_eval_leaves_later_exit_hooks_uninterrupted" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # `exit` in an eval runs the exit hooks on the eval's own task. The server's
+    # hook shuts it down first, and must not interrupt that task: every later hook
+    # that yields, like the footer's terminal write, would throw instead of running.
+    mktempdir() do registry
+        mktempdir() do work
+            marker = joinpath(work, "hook-finished")
+            prelude = "atexit(() -> (sleep(0.2); write($(repr(marker)), \"done\")))"
+            Utilities.spawn_server(registry, work; prelude) do port, pid
+                withenv("REPLICANT_DIR" => registry) do
+                    @test timedwait(() -> REPLicant._ping(port), 60.0) === :ok
+                    REPLicant.cli(["--port=$port", "-e", "exit(3)"]; err = IOBuffer())
+                end
+                @test timedwait(() -> !REPLicant._process_alive(pid), 30.0) === :ok
+            end
+            @test isfile(marker)
+        end
+    end
+end
+
 @testitem "status_formatting" tags = [:cli] begin
     import REPLicant
     import Dates
@@ -398,6 +420,19 @@ end
     @test_throws Exception REPLicant._parse_args(["bogus"])
 end
 
+@testitem "script_run_shows_the_script_as_its_code_line" tags = [:cli] begin
+    import REPLicant
+
+    # The footer and the activity log show the first line of the code sent, so a
+    # script run leads with the script and its ARGS rather than the restore logic.
+    mktempdir() do dir
+        script = joinpath(dir, "demo.jl")
+        write(script, "1")
+        code = REPLicant._script_code(script, ["a", "b c"])
+        @test REPLicant._one_line(code) == "# include($(repr(script))), ARGS = [\"a\", \"b c\"] …"
+    end
+end
+
 @testitem "client_dir_and_module_parsing" tags = [:cli] begin
     import REPLicant
 
@@ -558,6 +593,75 @@ end
     message = sprint(showerror, ex)
     @test contains(message, "no server owns")
     @test contains(message, "9001")
+end
+
+@testitem "select_entry_names_missing_label_outside_projects" tags = [:cli] begin
+    import REPLicant
+
+    # An explicit --name from a directory no server owns: the label is what failed
+    # to match, so say so rather than that nothing owns the directory.
+    entries = [REPLicant.RegistryEntry(9001, "/some/project/a", "alpha", "1.12", "111", "t")]
+    ex = try
+        REPLicant._select_entry(entries, "/different/place", "nope"; err = IOBuffer())
+        nothing
+    catch e
+        e
+    end
+    message = sprint(showerror, ex)
+    @test contains(message, "no server named \"nope\"")
+    @test contains(message, "alpha")
+end
+
+@testitem "list_servers_aligns_columns_past_long_project" tags = [:cli] begin
+    import REPLicant
+    import Sockets
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            # Listeners nobody accepts on show as unresponsive, which is enough to list.
+            listeners = [Sockets.listenany(0) for _ in 1:2]
+            try
+                REPLicant._write_registry_entry(first(listeners[1]), "/short"; token = "")
+                long = "/a/project/path/well/past/thirty/characters/wide"
+                REPLicant._write_registry_entry(first(listeners[2]), long; token = "")
+                out = IOBuffer()
+                REPLicant._list_servers(out)
+                lines = split(String(take!(out)), '\n'; keepempty = false)
+                header = first(findfirst("JULIA", lines[1]))
+                @test [first(findfirst(string(VERSION), line)) for line in lines[2:3]] ==
+                    [header, header]
+            finally
+                foreach(close ∘ last, listeners)
+            end
+        end
+    end
+end
+
+@testitem "resolve_reports_silent_owning_server" tags = [:cli] begin
+    import REPLicant
+    import Sockets
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            # A listener nobody accepts on, like a server whose REPL is running a
+            # computation that never yields: it owns the project but cannot pong.
+            port, listener = Sockets.listenany(0)
+            try
+                REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                ex = try
+                    REPLicant._resolve_port(-1, "/work/a", "")
+                    nothing
+                catch e
+                    e
+                end
+                message = sprint(showerror, ex)
+                @test contains(message, "port $port")
+                @test contains(message, "did not answer")
+            finally
+                close(listener)
+            end
+        end
+    end
 end
 
 @testitem "client_cross_project_refuses_through_cli" tags = [:cli] setup = [Utilities] begin
