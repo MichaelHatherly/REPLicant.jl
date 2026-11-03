@@ -56,11 +56,14 @@ function _read_entries()
     return entries
 end
 
-# Entries whose servers answer a ping, pruning the registry files of servers that are
-# gone. A busy server that cannot pong is left out but keeps its entry. The pings run
-# concurrently, so selection waits on the slowest server, not the sum of them.
-function _live_entries()
-    live = RegistryEntry[]
+# Entries of servers still running, pruning the registry files of servers that are
+# gone, with the ports that did not answer a ping. A server that cannot pong (its
+# accept loop held by a computation that never yields) keeps its entry and stays a
+# candidate, so selection never passes over it to another project's server. The pings
+# run concurrently, so selection waits on the slowest server, not the sum of them.
+function _running_entries()
+    running = RegistryEntry[]
+    silent = Set{Int}()
     entries = _read_entries()
     answered = fill(false, length(entries))
     @sync for (index, entry) in enumerate(entries)
@@ -68,12 +71,15 @@ function _live_entries()
     end
     for (entry, pong) in zip(entries, answered)
         if pong
-            push!(live, entry)
+            push!(running, entry)
         elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
+        else
+            push!(running, entry)
+            push!(silent, entry.port)
         end
     end
-    return live
+    return (; entries = running, silent)
 end
 
 # Build a selection error listing the candidate servers, showing --name for
@@ -158,7 +164,7 @@ function _select_entry(
 end
 
 # Resolve an eval target to a port: an explicit port wins and connects directly;
-# otherwise run the cascade over the live servers.
+# otherwise run the cascade over the running servers, refusing one that is silent.
 function _resolve_port(
         port::Integer, project::AbstractString, name::AbstractString; err::IO = stderr,
     )
@@ -166,7 +172,15 @@ function _resolve_port(
         _ping(port) || error("no REPLicant server responding on port $port")
         return port
     end
-    return _select_entry(_live_entries(), project, name; err).port
+    running = _running_entries()
+    entry = _select_entry(running.entries, project, name; err)
+    entry.port in running.silent && error(
+        "the server on port $(entry.port) for $(entry.project) did not answer within \
+        $(PING_TIMEOUT_SECONDS)s; something holds its accept loop, such as a computation \
+        at its REPL that never yields. Retry once it finishes, or stop it with: \
+        julia +rpc kill --port=$(entry.port)",
+    )
+    return entry.port
 end
 
 # Resolve a kill or restart target to its registry entry. Unlike eval, this reads the

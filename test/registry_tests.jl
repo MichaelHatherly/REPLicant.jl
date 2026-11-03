@@ -41,7 +41,7 @@ end
             try
                 path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
 
-                @test isempty(REPLicant._live_entries())
+                @test REPLicant._running_entries().silent == Set([port])
                 @test isfile(path)
 
                 out = IOBuffer()
@@ -70,7 +70,7 @@ end
                 for (port, _) in listeners
                     REPLicant._write_registry_entry(port, "/work/a"; token = "")
                 end
-                elapsed = @elapsed REPLicant._live_entries()
+                elapsed = @elapsed REPLicant._running_entries()
                 @test elapsed < 1.5 * REPLicant.PING_TIMEOUT_SECONDS
                 elapsed = @elapsed REPLicant._list_servers(IOBuffer())
                 @test elapsed < 1.5 * REPLicant.PING_TIMEOUT_SECONDS
@@ -91,7 +91,7 @@ end
             close(listener)
             path = REPLicant._write_registry_entry(port, "/work/a"; token = "")
 
-            @test isempty(REPLicant._live_entries())
+            @test isempty(REPLicant._running_entries().entries)
             @test !isfile(path)
         end
     end

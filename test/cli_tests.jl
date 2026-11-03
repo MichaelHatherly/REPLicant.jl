@@ -560,6 +560,33 @@ end
     @test contains(message, "9001")
 end
 
+@testitem "resolve_reports_silent_owning_server" tags = [:cli] begin
+    import REPLicant
+    import Sockets
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            # A listener nobody accepts on, like a server whose REPL is running a
+            # computation that never yields: it owns the project but cannot pong.
+            port, listener = Sockets.listenany(0)
+            try
+                REPLicant._write_registry_entry(port, "/work/a"; token = "")
+                ex = try
+                    REPLicant._resolve_port(-1, "/work/a", "")
+                    nothing
+                catch e
+                    e
+                end
+                message = sprint(showerror, ex)
+                @test contains(message, "port $port")
+                @test contains(message, "did not answer")
+            finally
+                close(listener)
+            end
+        end
+    end
+end
+
 @testitem "client_cross_project_refuses_through_cli" tags = [:cli] setup = [Utilities] begin
     import REPLicant
 
