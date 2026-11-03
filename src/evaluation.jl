@@ -16,6 +16,9 @@
 # capture target is bound.
 const REAL_OUT = Ref{IO}(devnull)
 const REAL_ERR = Ref{IO}(devnull)
+# Copies of fd 1/2 as routing found them, for `_restore_real_fds`.
+const NO_FDS = (RawFD(-1), RawFD(-1))
+const REAL_FDS = Ref{Tuple{RawFD, RawFD}}(NO_FDS)
 
 # The current eval's capture target, or `nothing` when no eval is active. Bound by
 # `with(CAPTURE_TARGET => sink)` and, on 1.11+, inherited by child tasks the eval
@@ -94,11 +97,32 @@ function _install_routing!()
     REAL_ERR[] = stderr
     redirect_stdout(Router(REAL_OUT))
     redirect_stderr(Router(REAL_ERR))
+    # The redirects pointed fd 1/2 at the real streams' fds, which the streams
+    # themselves may not expose: another package's router can wrap them first.
+    REAL_FDS[] = (_dup_uninherited(RawFD(1)), _dup_uninherited(RawFD(2)))
     _keep_capture_fds()
     pushdisplay(RouterDisplay())
     ROUTING_INSTALLED[] = true
     return nothing
 end
+
+# A copy of `fd` that subprocesses and an `execv` restart do not inherit.
+function _dup_uninherited(fd::RawFD)
+    copy = Base.Libc.dup(fd)
+    @static if Sys.iswindows()
+        HANDLE_FLAG_INHERIT = UInt32(1)
+        handle = Base.Libc._get_osfhandle(copy)
+        ccall(:SetHandleInformation, stdcall, Cint, (Base.OS_HANDLE, UInt32, UInt32), handle, HANDLE_FLAG_INHERIT, 0)
+    else
+        F_SETFD, FD_CLOEXEC = Cint(2), Cint(1)
+        @ccall fcntl(copy::RawFD, F_SETFD::Cint; FD_CLOEXEC::Cint)::Cint
+    end
+    return copy
+end
+
+# `Filesystem.File(fd)` would close the OS handle under a Windows CRT fd and leave
+# the fd itself open.
+_close_fd(fd::RawFD) = ccall((@static Sys.iswindows() ? :_close : :close), Cint, (RawFD,), fd)
 
 # `redirect_stdout`/`redirect_stderr` dup the new stream's fd onto fd 1/2. Inside a
 # capture those fds belong to the capture, so hand them back to it.
@@ -123,6 +147,8 @@ function _uninstall_routing!()
     ROUTING_INSTALLED[] || return nothing
     redirect_stdout(REAL_OUT[])
     redirect_stderr(REAL_ERR[])
+    foreach(_close_fd, REAL_FDS[])
+    REAL_FDS[] = NO_FDS
     _keep_capture_fds()
     # The REPL may have pushed its own display on top since routing was installed.
     popdisplay(RouterDisplay())
@@ -191,25 +217,17 @@ end
 _spawn_stream(s::CaptureSink) = s.file
 _spawn_stream(io) = io
 
-# `_redirect_io_libc` dups a stream's fd, so it needs an fd-backed stream. Julia
-# wraps `stdout` in an `IOContext` when color is forced (CI, `--color=yes`); unwrap
-# to the stream underneath. The routers still write to the full `IOContext`, so
-# `:color` and the rest carry through; only the fd redirect needs the bare stream.
-_fd_stream(@nospecialize(io::IO)) = io
-_fd_stream(@nospecialize(io::Base.IOContext)) = _fd_stream(io.io)
-
 # Dup `out` onto fd 1 and `err` onto fd 2. `_redirect_io_libc` is the primitive
 # `redirect_stdout` calls; it dups the fd portably (Windows `SetStdHandle` handled
-# internally). Unspecialized, since the real streams are a terminal, a pipe, or a
-# file depending on how the server was started.
-function _point_fds(@nospecialize(out::IO), @nospecialize(err::IO = out))
+# internally). `out` and `err` are a capture file or the `REAL_FDS` copies.
+function _point_fds(@nospecialize(out), @nospecialize(err = out))
     Base._redirect_io_libc(out, 1)
     Base._redirect_io_libc(err, 2)
     return nothing
 end
 
 # Point fd 1/2 back at the streams routing replaced, undoing a capture's redirect.
-_restore_real_fds() = _point_fds(_fd_stream(REAL_OUT[]), _fd_stream(REAL_ERR[]))
+_restore_real_fds() = _point_fds(REAL_FDS[]...)
 
 # Run `f` with its output captured, returning the captured text alongside the
 # value (or the thrown exception and its backtrace). InterruptException is rethrown

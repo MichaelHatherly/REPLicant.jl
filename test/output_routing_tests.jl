@@ -87,3 +87,61 @@ end
         REPLicant._install_routing!()
     end
 end
+
+@testitem "capture_restores_fds_when_the_real_streams_have_no_fd" tags = [:output_routing] begin
+    import REPLicant
+
+    # Another package's output router, installed before REPLicant, wraps the
+    # terminal in a stream with no fd of its own.
+    struct EarlierRouter <: Base.AbstractPipe
+        io::IO
+    end
+    Base.pipe_writer(r::EarlierRouter) = r.io
+    Base.pipe_reader(r::EarlierRouter) = r.io
+
+    fds() = (stat(RawFD(1)).inode, stat(RawFD(2)).inode)
+    REPLicant._uninstall_routing!()
+    original_out, original_err = stdout, stderr
+    redirect_stdout(EarlierRouter(original_out))
+    redirect_stderr(EarlierRouter(original_err))
+    try
+        REPLicant._install_routing!()
+        before = fds()
+        for _ in 1:2
+            result = REPLicant._capture() do
+                run(`echo hi`)
+                nothing
+            end
+            @test result.output == "hi\n"
+            @test fds() == before
+        end
+    finally
+        REPLicant._uninstall_routing!()
+        redirect_stdout(original_out)
+        redirect_stderr(original_err)
+        REPLicant._install_routing!()
+    end
+end
+
+@testitem "fd_copies_stay_out_of_children_and_close_on_uninstall" tags = [:output_routing] begin
+    import REPLicant
+
+    @static if Sys.iswindows()
+        @test true skip = true
+    else
+        fd_flags(fd) = @ccall fcntl(fd::RawFD, 1::Cint)::Cint
+        REPLicant._uninstall_routing!()
+        REPLicant._install_routing!()
+        copies = REPLicant.REAL_FDS[]
+        try
+            # Without FD_CLOEXEC every subprocess and every `execv` restart
+            # inherits the copies.
+            @test all(fd -> fd_flags(fd) & 1 == 1, copies)
+            REPLicant._uninstall_routing!()
+            @test all(fd -> fd_flags(fd) == -1, copies)
+        finally
+            REPLicant._uninstall_routing!()
+            REPLicant._install_routing!()
+        end
+    end
+end
