@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+## [v2.1.0] - 2026-11-03
+
 ### Added
 
 - Restart a server in place with `julia +rpc restart`. Getting a fresh process used to mean killing the server, which takes an interactive REPL's terminal with it. The server now runs its `atexit` hooks, puts the terminal back in cooked mode, and calls `execv` on the argv it launched with, from the directory it launched in. The pid, terminal, and environment carry over, `startup.jl` runs again, and the server registers on a new port. The client waits for that entry before it reports the new port. The request is answered off the worker queue, so it also frees a server wedged in a loop that never yields. Restart needs `execv`, so it works on macOS and Linux only; Windows servers refuse it [#81]
@@ -163,6 +165,7 @@ Initial Public Release
 [v1.1.0]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v1.1.0
 [v1.1.1]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v1.1.1
 [v2.0.0]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v2.0.0
+[v2.1.0]: https://github.com/MichaelHatherly/REPLicant.jl/releases/tag/v2.1.0
 [#4]: https://github.com/MichaelHatherly/REPLicant.jl/issues/4
 [#9]: https://github.com/MichaelHatherly/REPLicant.jl/issues/9
 [#19]: https://github.com/MichaelHatherly/REPLicant.jl/issues/19
