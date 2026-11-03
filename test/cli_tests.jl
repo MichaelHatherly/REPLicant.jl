@@ -560,6 +560,48 @@ end
     @test contains(message, "9001")
 end
 
+@testitem "select_entry_names_missing_label_outside_projects" tags = [:cli] begin
+    import REPLicant
+
+    # An explicit --name from a directory no server owns: the label is what failed
+    # to match, so say so rather than that nothing owns the directory.
+    entries = [REPLicant.RegistryEntry(9001, "/some/project/a", "alpha", "1.12", "111", "t")]
+    ex = try
+        REPLicant._select_entry(entries, "/different/place", "nope"; err = IOBuffer())
+        nothing
+    catch e
+        e
+    end
+    message = sprint(showerror, ex)
+    @test contains(message, "no server named \"nope\"")
+    @test contains(message, "alpha")
+end
+
+@testitem "list_servers_aligns_columns_past_long_project" tags = [:cli] begin
+    import REPLicant
+    import Sockets
+
+    mktempdir() do registry
+        withenv("REPLICANT_DIR" => registry) do
+            # Listeners nobody accepts on show as unresponsive, which is enough to list.
+            listeners = [Sockets.listenany(0) for _ in 1:2]
+            try
+                REPLicant._write_registry_entry(first(listeners[1]), "/short"; token = "")
+                long = "/a/project/path/well/past/thirty/characters/wide"
+                REPLicant._write_registry_entry(first(listeners[2]), long; token = "")
+                out = IOBuffer()
+                REPLicant._list_servers(out)
+                lines = split(String(take!(out)), '\n'; keepempty = false)
+                header = first(findfirst("JULIA", lines[1]))
+                @test [first(findfirst(string(VERSION), line)) for line in lines[2:3]] ==
+                    [header, header]
+            finally
+                foreach(close ∘ last, listeners)
+            end
+        end
+    end
+end
+
 @testitem "resolve_reports_silent_owning_server" tags = [:cli] begin
     import REPLicant
     import Sockets

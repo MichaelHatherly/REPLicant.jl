@@ -151,6 +151,7 @@ function _select_entry(
         length(named) == 1 && return _warn_foreign(err, named[1], target)
         length(named) > 1 &&
             throw(_candidates_error(named, "multiple servers named \"$name\""))
+        throw(_candidates_error(candidates, "no server named \"$name\""))
     end
 
     # No server owns the caller's location and no explicit selector was given.
@@ -427,59 +428,32 @@ function _format_status(marker::AbstractString)
 end
 
 function _list_servers(out::IO = stdout)
-    rows = Tuple{RegistryEntry, String}[]
-    entries = _read_entries()
+    entries = sort!(_read_entries(); by = entry -> entry.port)
     statuses = Vector{Union{Nothing, String}}(nothing, length(entries))
     @sync for (index, entry) in enumerate(entries)
         @async statuses[index] = _ping_status(entry.port)
     end
+    table = [["PORT", "NAME", "PROJECT", "JULIA", "PID", "STARTED", "STATUS"]]
     for (entry, status) in zip(entries, statuses)
         if !isnothing(status)
-            push!(rows, (entry, _format_status(status)))
+            status = _format_status(status)
         elseif _server_gone(entry.port, entry.pid)
             rm(_registry_entry_path(entry.port); force = true)
+            continue
         else
-            push!(rows, (entry, "unresponsive"))
+            status = "unresponsive"
         end
+        row = [string(entry.port), entry.name, entry.project, entry.julia, entry.pid]
+        push!(table, [row; entry.started; status])
     end
-    sort!(rows; by = row -> row[1].port)
-    _print_row(out, "PORT", "NAME", "PROJECT", "JULIA", "PID", "STARTED", "STATUS")
-    for (entry, status) in rows
-        _print_row(
-            out,
-            string(entry.port),
-            entry.name,
-            entry.project,
-            entry.julia,
-            entry.pid,
-            entry.started,
-            status,
-        )
+    widths = [maximum(textwidth(row[column]) for row in table) for column in 1:6]
+    for row in table
+        for (cell, width) in zip(row, widths)
+            print(out, rpad(cell, width), "  ")
+        end
+        println(out, row[end])
     end
     return nothing
-end
-
-function _print_row(
-        out::IO, port::AbstractString, name::AbstractString, project::AbstractString,
-        julia::AbstractString, pid::AbstractString, started::AbstractString,
-        status::AbstractString,
-    )
-    return println(
-        out,
-        rpad(port, 6),
-        "  ",
-        rpad(name, 12),
-        "  ",
-        rpad(project, 30),
-        "  ",
-        rpad(julia, 8),
-        "  ",
-        rpad(pid, 7),
-        "  ",
-        rpad(started, 23),
-        "  ",
-        status,
-    )
 end
 
 # Terminate a target server's process. Resolves from the raw registry so a wedged
