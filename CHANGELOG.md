@@ -47,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Let the exit hooks finish when an eval calls `exit`. The hooks run on the eval's own task. The server's hook runs first, shuts the server down, and interrupts the running eval, which is that same task. The next hook to yield took the `InterruptException`, so the footer printed a backtrace instead of handing its row back. The shutdown now leaves the task running the exit hooks alone [#96]
 - Show the script in the footer and the activity log for `julia +rpc script.jl`. Both showed the first line of the code sent, which was the internal statement that saves `ARGS`. The code now opens with a comment naming the included path and its `ARGS` [#96]
 - Say which label failed to match. `--name nope` from a directory no server owns reported that nothing owned the directory, which hid the typo in the name; it now reports that no server is named `nope` and lists the candidates. `julia +rpc ls` sizes its columns to their contents, so a long project path no longer pushes the rest of its row out of line [#96]
 - Name the busy server when it cannot answer. A server misses the client's 2s ping while its REPL runs a computation that never yields. The client then dropped it from selection and reported that no server owned the project, or picked the server of an enclosing project instead. Selection now keeps such a server, and the client says which port did not answer and how to stop it [#96]

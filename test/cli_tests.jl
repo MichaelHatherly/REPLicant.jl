@@ -210,6 +210,28 @@ end
     end
 end
 
+@testitem "exit_in_eval_leaves_later_exit_hooks_uninterrupted" tags = [:cli] setup = [Utilities] begin
+    import REPLicant
+
+    # `exit` in an eval runs the exit hooks on the eval's own task. The server's
+    # hook shuts it down first, and must not interrupt that task: every later hook
+    # that yields, like the footer's terminal write, would throw instead of running.
+    mktempdir() do registry
+        mktempdir() do work
+            marker = joinpath(work, "hook-finished")
+            prelude = "atexit(() -> (sleep(0.2); write($(repr(marker)), \"done\")))"
+            Utilities.spawn_server(registry, work; prelude) do port, pid
+                withenv("REPLICANT_DIR" => registry) do
+                    @test timedwait(() -> REPLicant._ping(port), 60.0) === :ok
+                    REPLicant.cli(["--port=$port", "-e", "exit(3)"]; err = IOBuffer())
+                end
+                @test timedwait(() -> !REPLicant._process_alive(pid), 30.0) === :ok
+            end
+            @test isfile(marker)
+        end
+    end
+end
+
 @testitem "status_formatting" tags = [:cli] begin
     import REPLicant
     import Dates

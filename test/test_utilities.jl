@@ -125,8 +125,10 @@
     # returns the entry path so a test can assert it was cleaned up. Used by kill
     # tests, which must target a process other than the test runner. The server
     # prints `server up` to `out` once it listens, and its stderr goes to `err`.
-    function spawn_server(func, registry, work; out = devnull, err = devnull)
+    # `prelude` runs before REPLicant loads.
+    function spawn_server(func, registry, work; out = devnull, err = devnull, prelude = "")
         script = """
+        $prelude
         using REPLicant; s = REPLicant.Server(); take!(s.channel)
         println("server up"); flush(stdout); wait(s.task)
         """
