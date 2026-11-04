@@ -91,12 +91,13 @@
         # passing escapes past the cut adds two more. The restart wait's sibling
         # set and timeout keyword, the versioned manifest names over an
         # `AbstractString` minor, the echo rule's `invokelatest` result, the
-        # routing install's two `invokelatest` redirects, and the capacity path's
-        # ping branch add the rest. The server's proof of its token
+        # `invokelatest` calls that move the routing install, each request's work
+        # and each dispatch into the latest world, and the capacity path's ping
+        # branch add the rest. The server's proof of its token
         # adds keyword `getfield`s on `_open_request` and `_verify_server`, the
         # `_read_frame` calls `_verify_server` makes, and `UnverifiedServer`'s field
         # `convert`s.
-        SOUND_LIMIT = 805   # JET.report_package(REPLicant; mode = :sound)
+        SOUND_LIMIT = 809   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

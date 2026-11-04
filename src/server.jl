@@ -400,68 +400,79 @@ function _spawn_worker(request_queue, active_connections, srv::Server)
         Threads.@spawn begin
             try
                 for request in request_queue
-                    if !isopen(request_queue)
-                        _refuse_shutting_down(request, active_connections)
-                        continue
-                    end
-                    # Run the eval in its own task so an interrupt request frees it
-                    # without unwinding the worker loop. The worker stays sequential:
-                    # it waits for each eval before taking the next, so only one eval
-                    # task, and one output capture, exists at a time. The task is
-                    # sticky (`@async`, not `Threads.@spawn`): the watcher below
-                    # schedules the interrupt from this same thread, so the eval must
-                    # stay pinned to it.
-                    eval_task = @async _handle_eval(
-                        request.socket,
-                        request.id,
-                        request.code,
-                        request.mod,
-                        srv.verbose,
-                        request.cwd,
-                    )
-                    # Deliver an interrupt on the eval's own thread. Pinned there by
-                    # `@async`, the watcher runs only when the eval has yielded, so
-                    # `schedule` lands on a parked task, the only safe way to throw an
-                    # exception into a cooperatively-running task. The dispatcher
-                    # notifies `signal` off the worker queue; the `finally` notify
-                    # releases the watcher when no interrupt arrives.
-                    signal = Base.Event()
-                    watcher = @async begin
-                        wait(signal)
-                        if !istaskdone(eval_task) && eval_task !== EXITING_TASK[]
-                            try
-                                schedule(eval_task, InterruptException(); error = true)
-                            catch  # dendro-ignore: empty_catch -- eval finished between the check and the schedule
-                            end
-                        end
-                    end
-                    srv.interrupt_signal = signal
-                    # A close between the check above and publishing the signal
-                    # found nothing to interrupt. `close` holds the queue's lock, so
-                    # checking under it orders the publish against close's load.
-                    Base.@lock request_queue isopen(request_queue) || notify(signal)
-                    _set_busy!(srv, Dates.now(), request.code)
-                    try
-                        wait(eval_task)
-                    catch error
-                        # `_handle_eval` reports eval and revision errors to the client
-                        # itself, so a throw here is the eval task failing unexpectedly.
-                        # Log it and keep the worker alive.
-                        @error "Eval task failed" id = request.id error
-                    finally
-                        srv.interrupt_signal = nothing
-                        _set_busy!(srv, nothing)
-                        notify(signal)
-                        wait(watcher)
-                        # Always decrement counter when done with a connection
-                        Threads.atomic_sub!(active_connections, 1)
-                    end
+                    # The worker keeps the world it started in, often `startup.jl`'s.
+                    # Code loaded since, such as a stream type now behind the
+                    # terminal, can be called only from the latest world.
+                    Base.invokelatest(_work, request, request_queue, active_connections, srv)
                 end
             catch error
                 @error "Error in worker task" error
             end
         end
     )
+end
+
+function _work(
+        request::ClientRequest, request_queue::Channel{ClientRequest},
+        active_connections::Threads.Atomic{Int}, srv::Server,
+    )
+    if !isopen(request_queue)
+        _refuse_shutting_down(request, active_connections)
+        return
+    end
+    # Run the eval in its own task so an interrupt request frees it
+    # without unwinding the worker loop. The worker stays sequential:
+    # it waits for each eval before taking the next, so only one eval
+    # task, and one output capture, exists at a time. The task is
+    # sticky (`@async`, not `Threads.@spawn`): the watcher below
+    # schedules the interrupt from this same thread, so the eval must
+    # stay pinned to it.
+    eval_task = @async _handle_eval(
+        request.socket,
+        request.id,
+        request.code,
+        request.mod,
+        srv.verbose,
+        request.cwd,
+    )
+    # Deliver an interrupt on the eval's own thread. Pinned there by
+    # `@async`, the watcher runs only when the eval has yielded, so
+    # `schedule` lands on a parked task, the only safe way to throw an
+    # exception into a cooperatively-running task. The dispatcher
+    # notifies `signal` off the worker queue; the `finally` notify
+    # releases the watcher when no interrupt arrives.
+    signal = Base.Event()
+    watcher = @async begin
+        wait(signal)
+        if !istaskdone(eval_task) && eval_task !== EXITING_TASK[]
+            try
+                schedule(eval_task, InterruptException(); error = true)
+            catch  # dendro-ignore: empty_catch -- eval finished between the check and the schedule
+            end
+        end
+    end
+    srv.interrupt_signal = signal
+    # A close between the check above and publishing the signal
+    # found nothing to interrupt. `close` holds the queue's lock, so
+    # checking under it orders the publish against close's load.
+    Base.@lock request_queue isopen(request_queue) || notify(signal)
+    _set_busy!(srv, Dates.now(), request.code)
+    try
+        wait(eval_task)
+    catch error
+        # `_handle_eval` reports eval and revision errors to the client
+        # itself, so a throw here is the eval task failing unexpectedly.
+        # Log it and keep the worker alive.
+        @error "Eval task failed" id = request.id error
+    finally
+        srv.interrupt_signal = nothing
+        _set_busy!(srv, nothing)
+        notify(signal)
+        wait(watcher)
+        # Always decrement counter when done with a connection
+        Threads.atomic_sub!(active_connections, 1)
+    end
+    return
 end
 
 # Accept connections forever, queuing each for the worker; reject at capacity.
@@ -498,8 +509,9 @@ function _admit(
             @info "Client connected" id peer = Sockets.getpeername(sock) active =
             active_connections[]
         # Dispatch off the accept loop so reading the frame and answering a ping
-        # never blocks accepting other connections.
-        @async _dispatch(sock, id, request_queue, active_connections, srv)
+        # never blocks accepting other connections, and in the latest world, for
+        # the reason the worker gives.
+        @async Base.invokelatest(_dispatch, sock, id, request_queue, active_connections, srv)
     end
     return
 end

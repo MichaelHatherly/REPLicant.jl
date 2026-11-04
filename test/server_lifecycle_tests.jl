@@ -372,3 +372,28 @@ end
         @test !isdefined(mod, :queued_ran)
     end
 end
+
+@testitem "server_calls_code_loaded_after_it_started" tags = [:server_lifecycle] setup = [Utilities] begin
+    import REPLicant
+
+    # `startup.jl` starts the server, and a `-L` file or the REPL extension loads
+    # after it. The REPL extension's busy hook stands in for that later code.
+    started = """
+    REPLicant.__notify_busy(::Nothing) = (println("busy hook ran"); flush(stdout))
+    """
+    mktempdir() do registry
+        mktempdir() do work
+            log = joinpath(work, "stdout.log")
+            withenv("REPLICANT_DIR" => registry) do
+                Utilities.spawn_server(registry, work; out = log, started) do port, _
+                    deadline = time() + 30
+                    while !contains(read(log, String), "server up") && time() < deadline
+                        sleep(0.05)
+                    end
+                    @test contains(Utilities.request(port, "1 + 1"), "2")
+                    @test contains(read(log, String), "busy hook ran")
+                end
+            end
+        end
+    end
+end
