@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Keep the server alive when a package loaded after `startup.jl` has already replaced `stdout`. The server task installs output routing once it is listening, from the world it started in. A stream type defined later, such as one a `-L` file loads, has no methods visible from that world. `redirect_stdout` then raised a `MethodError` that killed the server, and `julia +rpc ls` showed it as unresponsive. Julia could not print the failure either, so the terminal showed only "caught exception of type :MethodError while trying to print a failed Task notice". The redirects now run through `invokelatest` [#97]
+
 ## [v2.1.0] - 2026-11-03
 
 ### Added

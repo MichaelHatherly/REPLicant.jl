@@ -145,3 +145,35 @@ end
         end
     end
 end
+
+@testitem "routing_installs_over_a_stream_newer_than_the_caller" tags = [:output_routing] begin
+    import REPLicant
+
+    # The server task installs routing from the world it started in, and a package
+    # loaded after it may already have replaced stdout with a type of its own.
+    REPLicant._uninstall_routing!()
+    out, err = stdout, stderr
+    world = Base.get_world_counter()
+    Core.eval(
+        @__MODULE__, quote
+            struct LaterPipe <: Base.AbstractPipe
+                io::IO
+            end
+            Base.pipe_writer(pipe::LaterPipe) = pipe.io
+            Base.pipe_reader(pipe::LaterPipe) = pipe.io
+        end
+    )
+    later(io) = Base.invokelatest(getfield(@__MODULE__, :LaterPipe), io)
+    try
+        Base.invokelatest(redirect_stdout, later(out))
+        Base.invokelatest(redirect_stderr, later(err))
+        Base.invoke_in_world(world, REPLicant._install_routing!)
+        @test stdout isa REPLicant.Router
+        @test nameof(typeof(REPLicant.REAL_OUT[])) === :LaterPipe
+    finally
+        Base.invokelatest(REPLicant._uninstall_routing!)
+        Base.invokelatest(redirect_stdout, out)
+        Base.invokelatest(redirect_stderr, err)
+        REPLicant._install_routing!()
+    end
+end

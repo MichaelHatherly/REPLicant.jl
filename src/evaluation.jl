@@ -95,8 +95,10 @@ function _install_routing!()
     ROUTING_INSTALLED[] && return nothing
     REAL_OUT[] = stdout
     REAL_ERR[] = stderr
-    redirect_stdout(Router(REAL_OUT))
-    redirect_stderr(Router(REAL_ERR))
+    # The server task calls this from the world it started in, and a package loaded
+    # since may have replaced stdout with a stream type that world cannot dispatch on.
+    Base.invokelatest(redirect_stdout, Router(REAL_OUT))
+    Base.invokelatest(redirect_stderr, Router(REAL_ERR))
     # The redirects pointed fd 1/2 at the real streams' fds, which the streams
     # themselves may not expose: another package's router can wrap them first.
     REAL_FDS[] = (_dup_uninherited(RawFD(1)), _dup_uninherited(RawFD(2)))
