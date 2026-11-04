@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Keep the server working when code loads after `startup.jl` starts it. The server's tasks keep the world they started in, and nothing defined later is visible from there. A `-L` file can load a package that replaces `stdout`. That broke the server twice over. Once the server listened, the routing install raised a `MethodError` and killed it, and `julia +rpc ls` showed it as unresponsive. With the routing in place, the worker died on its first request instead, when the REPL extension set the terminal title through the new stream. Julia could not print either failure, so the terminal showed only "caught exception of type :MethodError while trying to print a failed Task notice". The routing install, each request's work and each dispatch now run through `invokelatest`, in the latest world [#97]
+
 ## [v2.1.0] - 2026-11-03
 
 ### Added
@@ -218,3 +222,4 @@ Initial Public Release
 [#91]: https://github.com/MichaelHatherly/REPLicant.jl/issues/91
 [#93]: https://github.com/MichaelHatherly/REPLicant.jl/issues/93
 [#96]: https://github.com/MichaelHatherly/REPLicant.jl/issues/96
+[#97]: https://github.com/MichaelHatherly/REPLicant.jl/issues/97
