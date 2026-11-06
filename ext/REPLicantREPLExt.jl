@@ -109,6 +109,60 @@ module HelpWorkload end
     end
 
     #
+    # Turn gate: a backend AST transform takes the human's turn before the command
+    # runs. Each prompt's `on_done` returns once the command has finished and printed,
+    # or failed, so a wrapper around it releases the turn.
+    #
+
+    struct TakeTurn <: Function
+        turns::REPLicant.Turns
+    end
+
+    (take::TakeTurn)(@nospecialize ast) =
+        Expr(:toplevel, Expr(:call, REPLicant._take_human_turn!, take.turns), ast)
+
+    struct ReleaseTurn <: Function
+        on_done::Function
+        turns::REPLicant.Turns
+    end
+
+    function (release::ReleaseTurn)(args...)
+        return try
+            release.on_done(args...)
+        finally
+            REPLicant._release_human_turn!(release.turns)
+        end
+    end
+
+    function _gate_prompt!(mode::LineEdit.Prompt, turns::REPLicant.Turns = REPLicant.TURNS)
+        mode.on_done isa ReleaseTurn || (mode.on_done = ReleaseTurn(mode.on_done, turns))
+        return mode
+    end
+
+    # Appended, so it wraps what `softscope` produced and the activity transform
+    # records the typed code without the turn call.
+    function _gate_backend!(transforms::Vector{Any}, turns::REPLicant.Turns = REPLicant.TURNS)
+        any(xf -> xf isa TakeTurn, transforms) || push!(transforms, TakeTurn(turns))
+        return transforms
+    end
+
+    # Called before each agent eval, since the REPL builds its backend and modes after
+    # `startup.jl` starts the server, and some modes, like Pkg's, only on first use.
+    function REPLicant.__install_turn_gate(::Nothing)
+        (isdefined(Base, :active_repl) && Base.active_repl isa REPL.LineEditREPL) || return nothing
+        isdefined(Base, :active_repl_backend) || return nothing
+        backend = Base.active_repl_backend
+        backend isa REPL.REPLBackend || return nothing
+        repl = Base.active_repl
+        isdefined(repl, :interface) || return nothing
+        _gate_backend!(backend.ast_transforms)
+        for mode in repl.interface.modes
+            mode isa LineEdit.Prompt && _gate_prompt!(mode)
+        end
+        return nothing
+    end
+
+    #
     # Activity log: capture human-typed input into the log, so an agent sharing the
     # session sees what was run at the prompt.
     #

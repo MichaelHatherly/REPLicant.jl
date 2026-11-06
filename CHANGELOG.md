@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- Stop a command typed at the REPL from running alongside an agent eval. Each eval changes the process's working directory and points its stdout and stderr at a capture file. A command typed meanwhile ran in the agent's directory, and its fd-level writes went into the agent's output. A typed command now waits for agent evals in flight, and an agent eval waits for the command, showing as busy until it starts. `julia +rpc interrupt` frees an eval that is still waiting, and Ctrl-C cancels a typed command that is. Pkg mode commands run on the REPL's frontend and are not gated. Agent evals never wait for one another, and a server started by a command never waits on that command [#99]
+
 ## [v2.1.1] - 2026-11-04
 
 ### Fixed
@@ -226,3 +230,4 @@ Initial Public Release
 [#93]: https://github.com/MichaelHatherly/REPLicant.jl/issues/93
 [#96]: https://github.com/MichaelHatherly/REPLicant.jl/issues/96
 [#97]: https://github.com/MichaelHatherly/REPLicant.jl/issues/97
+[#99]: https://github.com/MichaelHatherly/REPLicant.jl/issues/99
