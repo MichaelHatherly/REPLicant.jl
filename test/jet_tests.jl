@@ -97,7 +97,7 @@
         # adds keyword `getfield`s on `_open_request` and `_verify_server`, the
         # `_read_frame` calls `_verify_server` makes, and `UnverifiedServer`'s field
         # `convert`s.
-        SOUND_LIMIT = 809   # JET.report_package(REPLicant; mode = :sound)
+        SOUND_LIMIT = 806   # JET.report_package(REPLicant; mode = :sound)
         OPT_LIMIT = 0       # JET.report_opt on _parse_args(::Vector{String})
 
         if (VERSION.major, VERSION.minor) == (JET_JULIA.major, JET_JULIA.minor)

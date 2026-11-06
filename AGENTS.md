@@ -49,6 +49,8 @@ Three parts. The code is the reference; this is the map:
   registry directory. One worker runs evals one at a time. Each eval points fds
   1/2 at its capture file and runs in the caller's cwd. Both belong to the whole
   process, so evals must not overlap, and no lock can make overlapping evals safe.
+  A command typed at an interactive REPL counts as an eval too: it and agent
+  evals take turns (`src/turns.jl`).
 - **Client** (`REPLicant.cli`, via `bin/client.jl`): reads the registry, resolves
   a target, forwards the request. The `rpc` juliaup channel runs it. It loads a
   client-only build: `bin/client.jl` appends `bin/client-mode` to `LOAD_PATH`, whose

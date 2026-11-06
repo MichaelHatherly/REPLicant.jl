@@ -58,6 +58,7 @@ end
     include("workload.jl")
     include("precompile_client.jl")
 else
+    include("turns.jl")
     include("server.jl")
     include("restart.jl")
     include("registry.jl")

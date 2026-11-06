@@ -101,6 +101,10 @@ mutable struct Server
     # Named sessions (`--module`), with the lock that serializes worker eval against
     # dispatcher reset.
     sessions::SessionStore
+    # Turns with the human at an interactive REPL, and the human command that was
+    # running when this server started, which its evals never wait on.
+    turns::Turns
+    own_turn::Int
 
     function Server(
             mod = nothing;
@@ -127,6 +131,7 @@ mutable struct Server
         srv.busy_code = ""
         srv.interrupt_signal = nothing
         srv.sessions = SessionStore()
+        _claim_turns!(srv)
         srv.task = errormonitor(@async _server(srv))
         # Tie the channel's lifetime to the task so a startup failure closes the
         # channel and surfaces the error to `take!` instead of blocking forever.
@@ -141,6 +146,13 @@ end
 # host's own callable can swap the target between calls (e.g. a notebook module
 # replaced on re-init). Resolved by `_request_module` when a default-session request
 # is accepted.
+# Record the turns `srv` takes, and the human command running as it starts.
+function _claim_turns!(srv::Server, turns::Turns = TURNS)
+    srv.turns = turns
+    srv.own_turn = @lock turns.condition turns.human
+    return srv
+end
+
 _default_target(mod::Module) = () -> mod
 _default_target(::Nothing) = Base.active_module
 _default_target(f::Base.Callable) = f
@@ -426,7 +438,9 @@ function _work(
     # task, and one output capture, exists at a time. The task is
     # sticky (`@async`, not `Threads.@spawn`): the watcher below
     # schedules the interrupt from this same thread, so the eval must
-    # stay pinned to it.
+    # stay pinned to it. The eval waits for its turn inside the task, so an
+    # interrupt also frees an eval still waiting on the human's command.
+    __install_turn_gate(nothing)
     eval_task = @async _handle_eval(
         request.socket,
         request.id,
@@ -434,6 +448,8 @@ function _work(
         request.mod,
         srv.verbose,
         request.cwd,
+        srv.turns,
+        srv.own_turn,
     )
     # Deliver an interrupt on the eval's own thread. Pinned there by
     # `@async`, the watcher runs only when the eval has yielded, so
@@ -473,6 +489,30 @@ function _work(
         Threads.atomic_sub!(active_connections, 1)
     end
     return
+end
+
+function _handle_eval(
+        sock::IO, id::Integer, code::AbstractString, mod::Module,
+        verbose, dir::AbstractString, turns::Turns, own_turn::Int,
+    )
+    return try
+        verbose && @info "Received code" id code = Text(code)
+
+        # Wait and revise inside the `try`, so an interrupt during the wait or a
+        # failed revision reaches the client as an error.
+        result = _with_agent_turn(turns, own_turn) do
+            _revise(_evaluate_request, code, id, mod, dir)
+        end::@NamedTuple{output::String, errored::Bool}
+        _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
+
+        verbose && @info "Sent result" id result = Text(result.output)
+    catch error
+        _reply_error(sock, id, error)
+    finally
+        # Always close the socket to free resources and signal EOF to the client.
+        close(sock)
+        verbose && @info "Client disconnected" id
+    end
 end
 
 # Accept connections forever, queuing each for the worker; reject at capacity.

@@ -242,9 +242,9 @@ _restore_real_fds() = _point_fds(REAL_FDS[]...)
 # write end must be non-blocking for libuv, a flag fd 1/2 and child processes share
 # through the dup, so a larger raw write failed with EAGAIN and lost the output. A
 # file write neither fails that way nor waits on a reader, and outside Windows the
-# file is unlinked while it is written. fd 1 is process-global,
-# so a subprocess launched at the REPL prompt during an eval is captured into that
-# eval; the worker is sequential, so this is rare and accepted.
+# file is unlinked while it is written. fd 1 is process-global, so a command typed
+# at the REPL waits its turn (`turns.jl`); output from a background task the human
+# started is still captured into whichever eval is running.
 function _capture(f)
     # Capture routes through the installed streams. The server installs them at
     # start; install here too so a direct `_capture` (e.g. a test) still routes.
@@ -338,7 +338,7 @@ function _evaluate(code::AbstractString, id::Integer, mod::Module, dir::Abstract
         # graceful interruption of long-running code. Run in the caller's directory
         # when given so relative paths resolve there; `cd` restores the previous
         # directory on return or throw, so a `cd` inside the eval never leaks. Safe
-        # because the worker is sequential.
+        # because the worker is sequential and REPL commands wait their turn.
         result = isempty(dir) ? _capture(thunk) : cd(() -> _capture(thunk), dir)
 
         buffer = IOBuffer()

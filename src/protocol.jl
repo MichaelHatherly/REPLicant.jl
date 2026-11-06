@@ -359,24 +359,3 @@ function _reply_error(sock::IO, id::Integer, error)
     end
     return nothing
 end
-
-function _handle_eval(
-        sock::IO, id::Integer, code::AbstractString, mod::Module,
-        verbose, dir::AbstractString,
-    )
-    return try
-        verbose && @info "Received code" id code = Text(code)
-
-        # Revise inside the `try`, so a failed revision reaches the client as an error.
-        result = _revise(_evaluate_request, code, id, mod, dir)::@NamedTuple{output::String, errored::Bool}
-        _write_frame(sock, result.errored ? RESPONSE_ERR : RESPONSE_OK, result.output)
-
-        verbose && @info "Sent result" id result = Text(result.output)
-    catch error
-        _reply_error(sock, id, error)
-    finally
-        # Always close the socket to free resources and signal EOF to the client.
-        close(sock)
-        verbose && @info "Client disconnected" id
-    end
-end
